@@ -17,3 +17,20 @@ services:
         value: "0.04"
       - key: YOLO_CONF
         value: "0.28"
+      # --- Secretos: nunca se escriben aquí ---
+      # Render genera un valor aleatorio seguro (256 bits) la primera vez
+      - key: JWT_SECRET
+        generateValue: true
+      # sync: false = Render pide el valor en el panel al crear el servicio
+      - key: KOVAQ_ADMIN_USER
+        sync: false
+      - key: KOVAQ_ADMIN_PASSWORD
+        sync: false
+      - key: TURSO_URL
+        sync: false
+      - key: TURSO_TOKEN
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: VIDEO_PUSH_TOKEN
+        sync: false
