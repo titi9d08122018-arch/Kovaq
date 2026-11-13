@@ -11,7 +11,24 @@ from database import init_db, init_analytics, leer, escribir, pwd_context
 from ai_agent import preguntar_a_los_datos
 from analytics import router as analytics_router
 
-SECRET_KEY = os.getenv("JWT_SECRET", "cambiar_esto_en_produccion")
+JWT_SECRET_MIN = 32
+JWT_SECRET_INSEGUROS = {"cambiar_esto_en_produccion", "super-secreto-kovaq"}
+
+
+def validar_jwt_secret(valor):
+    """Devuelve el secreto si es seguro; si no, impide que la app arranque."""
+    valor = (valor or "").strip()
+    if not valor or valor in JWT_SECRET_INSEGUROS or len(valor) < JWT_SECRET_MIN:
+        raise RuntimeError(
+            f"JWT_SECRET falta, es un valor por defecto o tiene menos de {JWT_SECRET_MIN} caracteres. "
+            "La app no arrancará sin un secreto seguro. Genera uno con:\n"
+            "    python -c \"import secrets; print(secrets.token_urlsafe(48))\"\n"
+            "y guárdalo como JWT_SECRET en tu archivo .env (o en las variables de entorno de Render)."
+        )
+    return valor
+
+
+SECRET_KEY = validar_jwt_secret(os.getenv("JWT_SECRET"))
 ALGORITHM = "HS256"
 MODO = os.getenv("MODO", "local").lower()  # "local" o "nube"
 
