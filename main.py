@@ -106,10 +106,11 @@ async def login_page(request: Request, error: str = None):
 async def login_action(request: Request, username: str = Form(...), password: str = Form(...)):
     user_clean = (username or "").strip()
     usuario = leer(
-        "SELECT u.id, u.username, u.password_hash, u.nombre_completo, r.nombre FROM usuarios u JOIN roles r ON u.rol_id = r.id WHERE LOWER(u.username) = LOWER(?)",
+        "SELECT u.id, u.username, u.password_hash, u.nombre_completo, r.nombre, u.estado FROM usuarios u JOIN roles r ON u.rol_id = r.id WHERE LOWER(u.username) = LOWER(?)",
         (user_clean,), uno=True
     )
-    if not usuario or not pwd_context.verify(password, usuario[2]):
+    # Mismo mensaje genérico para usuario inexistente, clave incorrecta o cuenta no activa
+    if not usuario or not pwd_context.verify(password, usuario[2]) or usuario[5] != "activo":
         return templates.TemplateResponse(request, "login.html", {
             "error": "Credenciales inválidas. Verifique su usuario y contraseña."
         })
