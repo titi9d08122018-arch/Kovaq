@@ -3,6 +3,7 @@ import uuid
 import asyncio
 import threading
 import jwt
+from datetime import datetime, timedelta, timezone
 from fastapi import FastAPI, Request, Form, HTTPException, status, WebSocket, WebSocketDisconnect, UploadFile, File
 from fastapi.responses import RedirectResponse, HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -11,8 +12,26 @@ from database import init_db, init_analytics, leer, escribir, pwd_context
 from ai_agent import preguntar_a_los_datos
 from analytics import router as analytics_router
 
-SECRET_KEY = os.getenv("JWT_SECRET", "cambiar_esto_en_produccion")
+JWT_SECRET_MIN = 32
+JWT_SECRET_INSEGUROS = {"cambiar_esto_en_produccion", "super-secreto-kovaq"}
+
+
+def validar_jwt_secret(valor):
+    """Devuelve el secreto si es seguro; si no, impide que la app arranque."""
+    valor = (valor or "").strip()
+    if not valor or valor in JWT_SECRET_INSEGUROS or len(valor) < JWT_SECRET_MIN:
+        raise RuntimeError(
+            f"JWT_SECRET falta, es un valor por defecto o tiene menos de {JWT_SECRET_MIN} caracteres. "
+            "La app no arrancará sin un secreto seguro. Genera uno con:\n"
+            "    python -c \"import secrets; print(secrets.token_urlsafe(48))\"\n"
+            "y guárdalo como JWT_SECRET en tu archivo .env (o en las variables de entorno de Render)."
+        )
+    return valor
+
+
+SECRET_KEY = validar_jwt_secret(os.getenv("JWT_SECRET"))
 ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "480"))  # 8 horas
 MODO = os.getenv("MODO", "local").lower()  # "local" o "nube"
 
 # En nube NO se importa camera.py, así no se carga YOLO ni se abre la webcam
@@ -63,7 +82,8 @@ async def obtener_usuario_actual(request: Request):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="No autorizado")
     try:
         token = token_cookie.split(" ")[1]
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        # Rechaza tokens vencidos y también los que no traen "exp" (emitidos antes de este cambio)
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM], options={"require": ["exp"]})
         usuario = leer(
             "SELECT u.id, u.username, u.nombre_completo, r.nombre FROM usuarios u JOIN roles r ON u.rol_id = r.id WHERE u.username = ?",
             (payload.get("sub"),), uno=True
@@ -86,17 +106,23 @@ async def login_page(request: Request, error: str = None):
 async def login_action(request: Request, username: str = Form(...), password: str = Form(...)):
     user_clean = (username or "").strip()
     usuario = leer(
-        "SELECT u.id, u.username, u.password_hash, u.nombre_completo, r.nombre FROM usuarios u JOIN roles r ON u.rol_id = r.id WHERE LOWER(u.username) = LOWER(?)",
+        "SELECT u.id, u.username, u.password_hash, u.nombre_completo, r.nombre, u.estado FROM usuarios u JOIN roles r ON u.rol_id = r.id WHERE LOWER(u.username) = LOWER(?)",
         (user_clean,), uno=True
     )
-    if not usuario or not pwd_context.verify(password, usuario[2]):
+    # Mismo mensaje genérico para usuario inexistente, clave incorrecta o cuenta no activa
+    if not usuario or not pwd_context.verify(password, usuario[2]) or usuario[5] != "activo":
         return templates.TemplateResponse(request, "login.html", {
             "error": "Credenciales inválidas. Verifique su usuario y contraseña."
         })
 
-    token = jwt.encode({"sub": usuario[1], "rol": usuario[4]}, SECRET_KEY, algorithm=ALGORITHM)
+    vence = datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    token = jwt.encode({"sub": usuario[1], "rol": usuario[4], "exp": vence}, SECRET_KEY, algorithm=ALGORITHM)
     response = RedirectResponse(url="/dashboard", status_code=303)
-    response.set_cookie(key="access_token", value=f"Bearer {token}", httponly=True)
+    response.set_cookie(
+        key="access_token", value=f"Bearer {token}",
+        httponly=True, samesite="lax",
+        secure=(MODO == "nube"),  # en nube se sirve por HTTPS; en local (http://localhost) no
+    )
     return response
 
 @app.get("/logout")

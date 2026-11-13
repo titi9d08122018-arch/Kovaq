@@ -1,4 +1,5 @@
 import os
+import logging
 import libsql
 from dotenv import load_dotenv
 from passlib.context import CryptContext
@@ -9,6 +10,8 @@ TURSO_URL = os.getenv("TURSO_URL", "").strip()
 TURSO_TOKEN = os.getenv("TURSO_TOKEN", "").strip()
 DB_LOCAL = os.getenv("DB_LOCAL", "kovaq_local.db")
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+log = logging.getLogger("kovaq.db")
+ADMIN_PASSWORD_MIN = 12
 
 def _abrir():
     if TURSO_URL:
@@ -82,14 +85,34 @@ def init_db_sync():
         conn.commit()
 
         if conn.execute("SELECT COUNT(*) FROM usuarios").fetchone()[0] == 0:
-            rol_admin = conn.execute("SELECT id FROM roles WHERE nombre = 'admin'").fetchone()[0]
-            conn.execute(
-                "INSERT INTO usuarios (username, password_hash, nombre_completo, rol_id, estado) VALUES (?, ?, ?, ?, 'activo')",
-                ("admin", pwd_context.hash("KovaqSeguro2026"), "Administrador Maestro", rol_admin)
-            )
-            conn.commit()
+            _crear_admin_inicial(conn)
     finally:
         conn.close()
+
+
+def _crear_admin_inicial(conn):
+    """Crea el primer admin solo si KOVAQ_ADMIN_USER y KOVAQ_ADMIN_PASSWORD están definidas."""
+    usuario = os.getenv("KOVAQ_ADMIN_USER", "").strip()
+    clave = os.getenv("KOVAQ_ADMIN_PASSWORD", "")
+    if not usuario or not clave:
+        log.warning(
+            "No hay usuarios y faltan KOVAQ_ADMIN_USER / KOVAQ_ADMIN_PASSWORD: no se creó ningún admin. "
+            "Defínelas en .env (o en Render) o usa 'python crear_usuario.py'."
+        )
+        return
+    if len(clave) < ADMIN_PASSWORD_MIN:
+        log.warning(
+            "KOVAQ_ADMIN_PASSWORD debe tener al menos %d caracteres: no se creó ningún admin.",
+            ADMIN_PASSWORD_MIN,
+        )
+        return
+    rol_admin = conn.execute("SELECT id FROM roles WHERE nombre = 'admin'").fetchone()[0]
+    conn.execute(
+        "INSERT INTO usuarios (username, password_hash, nombre_completo, rol_id, estado) VALUES (?, ?, ?, ?, 'activo')",
+        (usuario, pwd_context.hash(clave), "Administrador Maestro", rol_admin)
+    )
+    conn.commit()
+    log.warning("Admin inicial '%s' creado desde KOVAQ_ADMIN_USER.", usuario)
 
 def guardar_trafico():
     escribir("INSERT INTO eventos (tipo) VALUES ('trafico')")
