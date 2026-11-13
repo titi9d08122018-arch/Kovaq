@@ -3,6 +3,7 @@ import uuid
 import asyncio
 import threading
 import jwt
+from datetime import datetime, timedelta, timezone
 from fastapi import FastAPI, Request, Form, HTTPException, status, WebSocket, WebSocketDisconnect, UploadFile, File
 from fastapi.responses import RedirectResponse, HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -30,6 +31,7 @@ def validar_jwt_secret(valor):
 
 SECRET_KEY = validar_jwt_secret(os.getenv("JWT_SECRET"))
 ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "480"))  # 8 horas
 MODO = os.getenv("MODO", "local").lower()  # "local" o "nube"
 
 # En nube NO se importa camera.py, así no se carga YOLO ni se abre la webcam
@@ -80,7 +82,8 @@ async def obtener_usuario_actual(request: Request):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="No autorizado")
     try:
         token = token_cookie.split(" ")[1]
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        # Rechaza tokens vencidos y también los que no traen "exp" (emitidos antes de este cambio)
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM], options={"require": ["exp"]})
         usuario = leer(
             "SELECT u.id, u.username, u.nombre_completo, r.nombre FROM usuarios u JOIN roles r ON u.rol_id = r.id WHERE u.username = ?",
             (payload.get("sub"),), uno=True
@@ -111,7 +114,8 @@ async def login_action(request: Request, username: str = Form(...), password: st
             "error": "Credenciales inválidas. Verifique su usuario y contraseña."
         })
 
-    token = jwt.encode({"sub": usuario[1], "rol": usuario[4]}, SECRET_KEY, algorithm=ALGORITHM)
+    vence = datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    token = jwt.encode({"sub": usuario[1], "rol": usuario[4], "exp": vence}, SECRET_KEY, algorithm=ALGORITHM)
     response = RedirectResponse(url="/dashboard", status_code=303)
     response.set_cookie(key="access_token", value=f"Bearer {token}", httponly=True)
     return response
