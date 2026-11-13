@@ -117,7 +117,11 @@ async def login_action(request: Request, username: str = Form(...), password: st
     vence = datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     token = jwt.encode({"sub": usuario[1], "rol": usuario[4], "exp": vence}, SECRET_KEY, algorithm=ALGORITHM)
     response = RedirectResponse(url="/dashboard", status_code=303)
-    response.set_cookie(key="access_token", value=f"Bearer {token}", httponly=True)
+    response.set_cookie(
+        key="access_token", value=f"Bearer {token}",
+        httponly=True, samesite="lax",
+        secure=(MODO == "nube"),  # en nube se sirve por HTTPS; en local (http://localhost) no
+    )
     return response
 
 @app.get("/logout")
