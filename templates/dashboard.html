@@ -131,21 +131,60 @@
         border-color: #FE5000 !important;
     }
 
-    /* Stage del Video y Overlay HUD */
+    /* Stage del Video y Overlay HUD (Contenido 100% sin desbordar en PC ni Mobile) */
     .hud-stage {
         position: relative;
         background-color: #08172b;
         border-radius: 18px;
         overflow: hidden;
-        aspect-ratio: 16/9;
+        width: 100%;
+        max-width: 100%;
+        height: clamp(230px, 42vw, 430px);
         display: flex;
         align-items: center;
         justify-content: center;
     }
+    .hud-stage video,
+    .hud-stage img {
+        width: 100% !important;
+        height: 100% !important;
+        max-width: 100% !important;
+        max-height: 100% !important;
+        object-fit: contain !important;
+        display: block;
+    }
     .hud-overlay {
         position: absolute;
         inset: 0;
+        width: 100% !important;
+        height: 100% !important;
         pointer-events: none;
+    }
+    .map-stage-container {
+        position: relative;
+        border-radius: 16px;
+        overflow: hidden;
+        border: 2px solid #E3E7ED;
+        background-color: #08172b;
+        width: 100%;
+        max-width: 100%;
+        height: clamp(260px, 38vw, 370px);
+    }
+    @media (max-width: 640px) {
+        .tab-kovaq-pill {
+            font-size: 0.76rem;
+            padding: 8px 14px;
+            min-height: 38px;
+        }
+        .card-kovaq {
+            border-radius: 16px;
+        }
+        .hud-stage {
+            height: 240px;
+        }
+        .map-stage-container {
+            height: 270px;
+        }
     }
     .hidden-hud {
         display: none !important;
@@ -210,27 +249,56 @@
        CABECERA PRINCIPAL DEL DASHBOARD
     ========================================================================= -->
     <header class="card-kovaq p-5 sm:p-6 border-l-8 border-l-kovaq-orange">
-        <div class="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-            <div>
-                <div class="flex items-center gap-2 mb-1.5">
-                    <span class="bg-emerald-100 text-emerald-800 text-[10px] font-mono-num font-bold px-2.5 py-0.5 rounded-full flex items-center gap-1">
-                        <span class="w-2 h-2 rounded-full bg-emerald-500 animate-ping"></span> SISTEMA ACTIVO
-                    </span>
-                    <span class="bg-slate-100 text-kovaq-navy text-[10px] font-mono-num font-bold px-2.5 py-0.5 rounded-full">
-                        CANAL EN VIVO
-                    </span>
+        <div class="flex flex-col gap-3.5">
+            <div class="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                    <div class="flex flex-wrap items-center gap-2 mb-1.5">
+                        <span class="bg-emerald-100 text-emerald-800 text-[10px] font-mono-num font-bold px-2.5 py-0.5 rounded-full flex items-center gap-1">
+                            <span class="w-2 h-2 rounded-full bg-emerald-500 animate-ping"></span> SISTEMA ACTIVO
+                        </span>
+                        <span class="bg-slate-100 text-kovaq-navy text-[10px] font-mono-num font-bold px-2.5 py-0.5 rounded-full">
+                            CANAL EN VIVO + HISTÓRICO TURSO
+                        </span>
+                        <span id="badge-rango-fechas" class="bg-orange-50 text-kovaq-orange border border-orange-200 text-[10px] font-mono-num font-bold px-2.5 py-0.5 rounded-full">
+                            Últimos 30 días (Agrupado por Semana)
+                        </span>
+                    </div>
+                    <h1 class="text-xl sm:text-2xl lg:text-3xl font-extrabold text-kovaq-navy font-title tracking-tight m-0">
+                        Panel de Control y Analítica de Percha
+                    </h1>
                 </div>
-                <h1 class="text-xl sm:text-2xl lg:text-3xl font-extrabold text-kovaq-navy font-title tracking-tight m-0">
-                    Panel de Control y Analítica de Percha
-                </h1>
-
             </div>
 
-            <!-- Acceso Directo de Monitoreo -->
-            <div class="flex items-center gap-2 text-xs font-title font-bold text-kovaq-navy bg-slate-50 border border-kovaq-border p-2.5 rounded-xl shrink-0">
-                <span class="text-kovaq-navy flex items-center gap-1.5"><i class="bi bi-camera-video-fill text-kovaq-orange"></i> Vista en Vivo</span>
-                <span class="text-slate-300">|</span>
-                <span class="text-kovaq-navy flex items-center gap-1.5"><i class="bi bi-graph-up text-blue-600"></i> Métricas Dinámicas</span>
+            <!-- Barra Global de Selección Temporal (Por Días, Semanas, Meses y Rango de Fechas) -->
+            <div class="w-full flex flex-wrap items-center justify-between gap-2 bg-slate-50 border border-kovaq-border p-2.5 rounded-2xl">
+                <div class="flex flex-wrap items-center gap-2">
+                    <span class="text-[11px] font-title font-bold text-kovaq-navy px-1.5 flex items-center gap-1">
+                        <i class="bi bi-calendar3 text-kovaq-orange"></i> Análisis Histórico:
+                    </span>
+                    <div class="flex flex-wrap items-center gap-1 bg-white p-1 rounded-xl border border-kovaq-border">
+                        <button type="button" id="btn-periodo-dia" onclick="aplicarPresetTemporal('dia', 1, this)" class="px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all text-kovaq-slate hover:text-kovaq-navy">
+                            Hoy (1d)
+                        </button>
+                        <button type="button" id="btn-periodo-semana" onclick="aplicarPresetTemporal('dia', 7, this)" class="px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all text-kovaq-slate hover:text-kovaq-navy">
+                            7 Días
+                        </button>
+                        <button type="button" id="btn-periodo-mes" onclick="aplicarPresetTemporal('semana', 30, this)" class="px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all bg-kovaq-navy text-white shadow-sm">
+                            30 Días (Semanal)
+                        </button>
+                        <button type="button" id="btn-periodo-trimestre" onclick="aplicarPresetTemporal('mes', 90, this)" class="px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all text-kovaq-slate hover:text-kovaq-navy">
+                            90 Días (Mensual)
+                        </button>
+                    </div>
+                </div>
+                <div class="flex flex-wrap items-center gap-1.5 text-[11px]">
+                    <span class="text-[10px] font-bold text-kovaq-slate uppercase tracking-wider mr-0.5">Rango Libre:</span>
+                    <input type="date" id="filtro-fecha-inicio" class="bg-white border border-kovaq-border text-kovaq-navy rounded-lg px-2 py-1 text-[11px] font-mono-num" title="Fecha inicio">
+                    <span class="text-slate-400">→</span>
+                    <input type="date" id="filtro-fecha-fin" class="bg-white border border-kovaq-border text-kovaq-navy rounded-lg px-2 py-1 text-[11px] font-mono-num" title="Fecha fin">
+                    <button type="button" onclick="aplicarRangoFechasPersonalizado()" class="btn-kovaq-outline text-[11px] py-1 px-2.5 min-h-[30px]">
+                        Filtrar Días
+                    </button>
+                </div>
             </div>
         </div>
     </header>
@@ -311,17 +379,17 @@
                     </div>
 
                     <!-- Escenario de Video 100% Nítido y Fluido con Overlay de Perchas y Personas -->
-                    <div class="hud-stage p-0 min-h-[460px] relative" id="yolo-stage-container">
-                        <div id="video-container" class="w-full h-full flex items-center justify-center relative min-h-[460px]">
+                    <div class="hud-stage p-0 relative" id="yolo-stage-container">
+                        <div id="video-container" class="w-full h-full flex items-center justify-center relative overflow-hidden">
                             <!-- Video de respaldo ejecutado de forma nativa en el navegador -->
-                            <video id="demo-video-player" autoplay loop muted playsinline class="w-full h-auto max-h-[460px] object-contain block">
+                            <video id="demo-video-player" autoplay loop muted playsinline class="w-full h-full object-contain block">
                                 <source src="/static/demo_supermercado.mp4" type="video/mp4">
                             </video>
-                            <div class="absolute top-3 right-3 px-3 py-1 bg-kovaq-navy/90 text-white text-xs font-mono-num font-bold rounded-lg border border-white/20 shadow-sm z-10 flex items-center gap-1.5">
+                            <div class="absolute top-2.5 right-2.5 px-2.5 py-1 bg-kovaq-navy/90 text-white text-[10px] sm:text-xs font-mono-num font-bold rounded-lg border border-white/20 shadow-sm z-10 flex items-center gap-1.5">
                                 <span class="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span> <span id="badge-video-mode">Tracking Multi-Cámara Activo</span>
                             </div>
                         </div>
-                        <canvas id="yolo-hud-canvas" width="480" height="360" class="hud-overlay w-full h-full object-contain"></canvas>
+                        <canvas id="yolo-hud-canvas" width="480" height="360" class="hud-overlay object-contain"></canvas>
                     </div>
 
                     <!-- Footer de Entrada de Medios -->
@@ -374,17 +442,17 @@
                     </div>
 
                     <!-- Lienzo Interactivo 2D del Supermercado -->
-                    <div class="relative rounded-2xl overflow-hidden border-2 border-kovaq-border bg-[#08172b]" style="height: 360px;">
+                    <div class="map-stage-container">
                         <canvas id="store-map-canvas" width="920" height="360" class="w-full h-full block"></canvas>
-                        <div class="absolute bottom-2.5 left-3 right-3 flex flex-wrap items-center justify-between gap-2 text-[11px] text-white/90 bg-kovaq-navy/85 backdrop-blur px-3 py-1.5 rounded-xl border border-white/10">
-                            <div class="flex flex-wrap items-center gap-3">
-                                <span class="flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded-full bg-emerald-400 inline-block"></span> Persona Trackeada (G#ID)</span>
-                                <span class="flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded-full bg-kovaq-orange inline-block"></span> En Toma de Producto</span>
-                                <span class="flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded-full bg-blue-400 inline-block"></span> Devolución en Percha</span>
-                                <span class="flex items-center gap-1.5"><span class="w-3 h-1.5 bg-amber-400/60 border border-amber-300 inline-block"></span> Góndola / Percha Mapeada</span>
+                        <div class="absolute bottom-2 left-2 right-2 flex flex-wrap items-center justify-between gap-1.5 text-[10px] sm:text-[11px] text-white/90 bg-kovaq-navy/85 backdrop-blur px-2.5 py-1.5 rounded-xl border border-white/10">
+                            <div class="flex flex-wrap items-center gap-2 sm:gap-3">
+                                <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-emerald-400 inline-block"></span> Vector Cliente (S#ID)</span>
+                                <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-kovaq-orange inline-block"></span> Toma</span>
+                                <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-blue-400 inline-block"></span> Devolución</span>
+                                <span class="hidden sm:flex items-center gap-1"><span class="w-2.5 h-1.5 bg-amber-400/60 border border-amber-300 inline-block"></span> Percha POP</span>
                             </div>
                             <span class="font-mono-num text-[10px] text-orange-300 font-bold" id="map-handoff-counter">
-                                0 Handoffs Re-ID Registrados
+                                0 Handoffs Re-ID
                             </span>
                         </div>
                     </div>
@@ -527,21 +595,47 @@
     ========================================================================= -->
     <section id="tab-percha" class="module-pane space-y-6">
         
-        <!-- Header del Módulo -->
+        <!-- Header del Módulo con Selector de Agrupación Temporal (Por Día / Por Semana / Por Mes) -->
         <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-2 border-b border-kovaq-border">
             <div>
                 <h2 class="text-xl font-bold font-title text-kovaq-navy m-0 flex items-center gap-2">
                     <i class="bi bi-graph-up-arrow text-kovaq-orange"></i> Analítica de Percha & Comportamiento In-Store
                 </h2>
-                <p class="text-xs text-kovaq-slate m-0">Métricas acumuladas de atracción, permanencia y distribución por momentos del día.</p>
+                <p class="text-xs text-kovaq-slate m-0" id="subtitulo-periodo-activo">Datos históricos generados desde Turso • Vista: Últimos 30 días</p>
             </div>
-            <div class="flex items-center gap-2">
-                <span class="text-xs font-bold text-kovaq-navy">Período:</span>
-                <select id="select-heatmap-dias" class="bg-white border-2 border-kovaq-border text-kovaq-navy text-xs font-bold rounded-xl px-3 py-1.5 focus:outline-none" onchange="cargarHeatmaps()">
-                    <option value="7">Últimos 7 días</option>
-                    <option value="30" selected>Últimos 30 días</option>
-                    <option value="90">Últimos 90 días</option>
+            <div class="flex flex-wrap items-center gap-2">
+                <span class="text-xs font-bold text-kovaq-navy">Agrupar por:</span>
+                <select id="select-agrupacion-temporal" class="bg-white border-2 border-kovaq-border text-kovaq-navy text-xs font-bold rounded-xl px-3 py-1.5 focus:outline-none" onchange="cambiarAgrupacionTemporal(this.value)">
+                    <option value="dia" selected>Por Días (Diario)</option>
+                    <option value="semana">Por Semanas (Semanal)</option>
+                    <option value="mes">Por Meses (Mensual)</option>
                 </select>
+                <span class="text-xs font-bold text-kovaq-navy ml-1">Ventana:</span>
+                <select id="select-heatmap-dias" class="bg-white border-2 border-kovaq-border text-kovaq-navy text-xs font-bold rounded-xl px-3 py-1.5 focus:outline-none" onchange="cambiarVentanaDias(this.value)">
+                    <option value="1">Hoy (1 día)</option>
+                    <option value="7">Últimos 7 días</option>
+                    <option value="15">Últimos 15 días</option>
+                    <option value="30" selected>Últimos 30 días</option>
+                    <option value="90">Últimos 90 días (3 Meses)</option>
+                </select>
+            </div>
+        </div>
+
+        <!-- Gráfico de Evolución Histórica desde Turso (Por Día / Por Semana / Por Mes) -->
+        <div class="card-kovaq p-5 space-y-3 border-l-4 border-l-kovaq-orange">
+            <div class="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-kovaq-border">
+                <div>
+                    <h3 class="font-title text-sm font-bold text-kovaq-navy m-0 flex items-center gap-2">
+                        <i class="bi bi-calendar-range-fill text-kovaq-orange"></i> Evolución Histórica en Turso (Tráfico, Tomas y Devoluciones por <span id="lbl-agrupacion-chart">Día</span>)
+                    </h3>
+                    <p class="text-[11px] text-kovaq-slate m-0">Comparativa histórica de clientes validados (Puerta → Caja), productos llevados y devoluciones de último momento.</p>
+                </div>
+                <span class="text-[10px] font-mono-num bg-slate-100 text-kovaq-navy px-2.5 py-1 rounded-full font-bold" id="badge-rango-fechas">
+                    Histórico Turso Activo
+                </span>
+            </div>
+            <div class="h-60 sm:h-68">
+                <canvas id="chart-serie-temporal"></canvas>
             </div>
         </div>
 
@@ -2124,10 +2218,10 @@ const videoContainer = document.getElementById("video-container");
 // Función que reproduce el video de respaldo directamente en HTML5 nativo (100% fluido, cero lag)
 function mostrarVideoRespaldoInicial() {
     videoContainer.innerHTML = `
-        <video id="demo-video-player" autoplay loop muted playsinline class="w-full h-auto max-h-[460px] object-contain block">
+        <video id="demo-video-player" autoplay loop muted playsinline class="w-full h-full object-contain block">
             <source src="/static/demo_supermercado.mp4" type="video/mp4">
         </video>
-        <div class="absolute top-3 right-3 px-3 py-1 bg-kovaq-navy/90 text-white text-xs font-mono-num font-bold rounded-lg border border-white/20 shadow-sm z-10 flex items-center gap-1.5">
+        <div class="absolute top-2.5 right-2.5 px-2.5 py-1 bg-kovaq-navy/90 text-white text-[10px] sm:text-xs font-mono-num font-bold rounded-lg border border-white/20 shadow-sm z-10 flex items-center gap-1.5">
             <span class="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span> Video de Respaldo Supermercado
         </div>
     `;
@@ -2190,15 +2284,16 @@ function manejarErrorStream(img) {
     mostrarVideoRespaldoInicial();
 }
 
-function cargarStreamEnVivo() {
+function cargarStreamEnVivo(forzarFeedLocal = false) {
     videoContainer.innerHTML = '';
     const img = document.createElement("img");
     img.id = "live-stream-img";
     img.alt = "Stream de Cámara en Vivo";
-    img.style.cssText = "width:100%; height:auto; max-height:460px; object-fit:contain; display:block;";
+    img.style.cssText = "width:100%; height:100%; max-width:100%; max-height:100%; object-fit:contain; display:block;";
     img.onerror = () => manejarErrorStream(img);
     videoContainer.appendChild(img);
-    img.src = VIDEO_URL + "?t=" + Date.now();
+    const urlBase = forzarFeedLocal ? "/api/video_feed" : VIDEO_URL;
+    img.src = urlBase + "?t=" + Date.now();
 }
 
 function seleccionarVideoDemoRapido() {
@@ -2219,30 +2314,135 @@ async function subirArchivoLocal() {
         return;
     }
 
-    statusDiv.innerText = "Subiendo y procesando...";
+    statusDiv.innerHTML = `<span class="text-kovaq-orange font-bold"><i class="bi bi-cpu animate-spin mr-1"></i> Analizando video/imagen con YOLOv8 y mapeando coordenadas...</span>`;
     const formData = new FormData();
     formData.append("archivo", archivo);
 
     try {
         const res = await fetch("/api/upload", { method: "POST", body: formData });
-        if (!res.ok) throw new Error("Error en servidor");
-        
-        statusDiv.innerText = "¡Archivo procesado con éxito!";
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.detail || "Error en servidor");
+
+        statusDiv.innerHTML = `<span class="text-emerald-700 font-bold">✅ ${data.resumen || "¡Archivo analizado al instante!"}</span>`;
         input.value = "";
-        cargarStreamEnVivo();
+        cargarStreamEnVivo(true);
+        await sincronizarTelemetriaBackend();
+        await sincronizarMapa2D();
+        await actualizarDatosDashboard();
+        await cargarResumenEjecutivoPublicidad();
     } catch (err) {
-        statusDiv.innerText = "Error al procesar el archivo.";
+        statusDiv.innerText = "Error al procesar el archivo: " + err.message;
     }
 }
 
 
 
 // =========================================================================
+// FILTRO TEMPORAL GLOBAL (POR DÍA / POR SEMANA / POR MES / RANGO DE FECHAS)
+// =========================================================================
+let filtroTemporalGlobal = {
+    agrupacion: 'dia',
+    dias: 30,
+    fecha_inicio: '',
+    fecha_fin: ''
+};
+let chartSerieTemporal = null;
+
+function construirQueryTemporal(extraParams = {}) {
+    const params = new URLSearchParams();
+    params.set('dias', filtroTemporalGlobal.dias || 30);
+    if (filtroTemporalGlobal.fecha_inicio) params.set('fecha_inicio', filtroTemporalGlobal.fecha_inicio);
+    if (filtroTemporalGlobal.fecha_fin) params.set('fecha_fin', filtroTemporalGlobal.fecha_fin);
+    Object.entries(extraParams).forEach(([k, v]) => {
+        if (v !== undefined && v !== null) params.set(k, v);
+    });
+    return params.toString();
+}
+
+function aplicarPresetTemporal(agrupacion, dias, btnEl) {
+    filtroTemporalGlobal.agrupacion = agrupacion;
+    filtroTemporalGlobal.dias = dias;
+    filtroTemporalGlobal.fecha_inicio = '';
+    filtroTemporalGlobal.fecha_fin = '';
+
+    const fi = document.getElementById("filtro-fecha-inicio");
+    const ff = document.getElementById("filtro-fecha-fin");
+    if (fi) fi.value = '';
+    if (ff) ff.value = '';
+
+    const selAgrup = document.getElementById("select-agrupacion-temporal");
+    if (selAgrup) selAgrup.value = agrupacion;
+    const selDias = document.getElementById("select-heatmap-dias");
+    if (selDias) selDias.value = String(dias);
+
+    ['btn-periodo-dia', 'btn-periodo-semana', 'btn-periodo-mes', 'btn-periodo-trimestre'].forEach(id => {
+        const b = document.getElementById(id);
+        if (b) b.className = "px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all text-kovaq-slate hover:text-kovaq-navy";
+    });
+    if (btnEl) {
+        btnEl.className = "px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all bg-kovaq-navy text-white shadow-sm";
+    }
+
+    actualizarEtiquetasPeriodo();
+    refrescarTodosLosDashboardsPorPeriodo();
+}
+
+function cambiarAgrupacionTemporal(nuevaAgrupacion) {
+    filtroTemporalGlobal.agrupacion = nuevaAgrupacion;
+    actualizarEtiquetasPeriodo();
+    cargarHeatmaps();
+}
+
+function cambiarVentanaDias(nuevosDias) {
+    filtroTemporalGlobal.dias = parseInt(nuevosDias, 10) || 30;
+    filtroTemporalGlobal.fecha_inicio = '';
+    filtroTemporalGlobal.fecha_fin = '';
+    actualizarEtiquetasPeriodo();
+    refrescarTodosLosDashboardsPorPeriodo();
+}
+
+function aplicarRangoFechasPersonalizado() {
+    const fi = document.getElementById("filtro-fecha-inicio")?.value || '';
+    const ff = document.getElementById("filtro-fecha-fin")?.value || '';
+    if (!fi) {
+        alert("Seleccione al menos la fecha de inicio para filtrar los datos históricos.");
+        return;
+    }
+    filtroTemporalGlobal.fecha_inicio = fi;
+    filtroTemporalGlobal.fecha_fin = ff || fi;
+    actualizarEtiquetasPeriodo();
+    refrescarTodosLosDashboardsPorPeriodo();
+}
+
+function actualizarEtiquetasPeriodo() {
+    const mapNombre = { dia: "Día", semana: "Semana", mes: "Mes" };
+    const lblChart = document.getElementById("lbl-agrupacion-chart");
+    if (lblChart) lblChart.innerText = mapNombre[filtroTemporalGlobal.agrupacion] || "Día";
+
+    const sub = document.getElementById("subtitulo-periodo-activo");
+    const badge = document.getElementById("badge-rango-fechas");
+    const textoRango = filtroTemporalGlobal.fecha_inicio
+        ? `Rango: ${filtroTemporalGlobal.fecha_inicio} → ${filtroTemporalGlobal.fecha_fin}`
+        : `Últimos ${filtroTemporalGlobal.dias} días (Agrupado por ${mapNombre[filtroTemporalGlobal.agrupacion]})`;
+    if (sub) sub.innerText = `Datos históricos generados desde Turso • ${textoRango}`;
+    if (badge) badge.innerText = textoRango;
+}
+
+async function refrescarTodosLosDashboardsPorPeriodo() {
+    await Promise.all([
+        actualizarDatosDashboard(),
+        cargarResumenEjecutivoPublicidad(),
+        cargarInventarioReal(),
+        cargarHeatmaps()
+    ]);
+}
+
+// =========================================================================
 // MÓDULO 3: CARGA DE INVENTARIO REAL DESDE TURSO (VINCULADO A PERCHAS)
 // =========================================================================
 async function cargarInventarioReal() {
     try {
-        const res = await fetch("/api/analytics/inventario");
+        const res = await fetch(`/api/analytics/inventario?${construirQueryTemporal()}`);
         if (!res.ok) return;
         const data = await res.json();
         const items = data.productos || [];
@@ -2424,7 +2624,7 @@ async function guardarPromocionPercha(e) {
 
 async function cargarResumenEjecutivoPublicidad() {
     try {
-        const res = await fetch("/api/analytics/resumen_publicidad");
+        const res = await fetch(`/api/analytics/resumen_publicidad?${construirQueryTemporal()}`);
         if (!res.ok) return;
         const ex = await res.json();
 
@@ -2543,7 +2743,7 @@ async function eliminarCamaraBackend(camId) {
 // =========================================================================
 async function actualizarDatosDashboard() {
     try {
-        const res = await fetch("/api/stats");
+        const res = await fetch(`/api/stats?${construirQueryTemporal()}`);
         if (!res.ok) return;
         const s = await res.json();
 
@@ -2711,13 +2911,14 @@ function cambiarVistaMatriz(modo) {
 }
 
 async function cargarHeatmaps() {
-    const sel = document.getElementById("select-heatmap-dias");
-    const dias = sel ? sel.value : 30;
+    const qBase = construirQueryTemporal();
+    const qSerie = construirQueryTemporal({ agrupacion: filtroTemporalGlobal.agrupacion || 'dia' });
     try {
-        const [resHora, resMatriz, resFranjas] = await Promise.all([
-            fetch(`/api/analytics/heatmap/hora?dias=${dias}`),
-            fetch(`/api/analytics/heatmap/matriz?dias=${dias}`),
-            fetch(`/api/analytics/horarios/franjas?dias=${dias}`)
+        const [resHora, resMatriz, resFranjas, resSerie] = await Promise.all([
+            fetch(`/api/analytics/heatmap/hora?${qBase}`),
+            fetch(`/api/analytics/heatmap/matriz?${qBase}`),
+            fetch(`/api/analytics/horarios/franjas?${qBase}`),
+            fetch(`/api/analytics/serie_temporal?${qSerie}`)
         ]);
         
         if (resHora.ok) {
@@ -2737,9 +2938,82 @@ async function cargarHeatmaps() {
             renderDonutFranjas(df);
             actualizarTarjetasFranjas(df);
         }
+
+        if (resSerie.ok) {
+            const ds = await resSerie.json();
+            renderGraficoSerieTemporal(ds);
+        }
     } catch (e) {
         console.error("Error cargando heatmaps:", e);
     }
+}
+
+function renderGraficoSerieTemporal(ds) {
+    const ctx = document.getElementById("chart-serie-temporal");
+    if (!ctx) return;
+    if (chartSerieTemporal) chartSerieTemporal.destroy();
+
+    chartSerieTemporal = new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: ds.labels || [],
+            datasets: [
+                {
+                    label: 'Tráfico Clientes (Puerta→Caja)',
+                    data: ds.trafico || [],
+                    borderColor: '#0C2340',
+                    backgroundColor: 'rgba(12, 35, 64, 0.08)',
+                    borderWidth: 2.5,
+                    tension: 0.35,
+                    fill: true
+                },
+                {
+                    label: 'Productos Tomados (Picks)',
+                    data: ds.tomados || [],
+                    borderColor: '#FE5000',
+                    backgroundColor: 'rgba(254, 80, 0, 0.12)',
+                    borderWidth: 2.5,
+                    tension: 0.35,
+                    fill: false
+                },
+                {
+                    label: 'Devueltos (Último Momento)',
+                    data: ds.devueltos || [],
+                    borderColor: '#2563EB',
+                    borderDash: [5, 5],
+                    borderWidth: 2,
+                    tension: 0.35,
+                    fill: false
+                }
+            ]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: {
+                    position: 'top',
+                    labels: { font: { family: 'Inter', size: 11, weight: 'bold' }, color: '#0C2340', boxWidth: 12 }
+                },
+                tooltip: {
+                    backgroundColor: '#0C2340',
+                    titleFont: { family: 'Space Grotesk', weight: 'bold' },
+                    bodyFont: { family: 'JetBrains Mono' }
+                }
+            },
+            scales: {
+                y: {
+                    beginAtZero: true,
+                    grid: { color: '#E3E7ED' },
+                    ticks: { font: { family: 'JetBrains Mono' }, color: '#475569' }
+                },
+                x: {
+                    grid: { display: false },
+                    ticks: { font: { family: 'JetBrains Mono', size: 10 }, color: '#475569', maxTicksLimit: 12 }
+                }
+            }
+        }
+    });
 }
 
 function actualizarTarjetasFranjas(df) {

@@ -838,6 +838,88 @@ class CameraService:
         self.solicitud = (tipo, ruta)
         self.pausado = False
 
+    def procesar_archivo_subido_inmediato(self, tipo: str, ruta: str) -> dict:
+        """
+        Analiza al instante un video o imagen recién subido por el usuario (funciona tanto en MODO=local como en MODO=nube):
+        - Si es imagen: ejecuta el análisis de frame completo (perchas, postura de cabeza, exclusión de staff, coordenadas 2D).
+        - Si es video: muestrea fotogramas clave a lo largo del clip, ejecuta YOLOv8n + ShelfAnalyzer + MultiCameraTracker,
+          persiste los eventos/coordenadas en Turso y si los hilos de streaming no estaban activos los arranca.
+        """
+        self._cargar_modelo_yolo()
+        self.recargar_mapa_tienda()
+
+        if not os.path.exists(ruta):
+            return {"ok": False, "frames_analizados": 0, "resumen": "Archivo no encontrado"}
+
+        frames_analizados = 0
+        agarrados_antes = self.total_agarrados
+        devueltos_antes = self.total_devueltos
+        entradas_antes = self.total_entradas
+
+        if tipo == "imagen":
+            img = cv2.imread(ruta)
+            if img is not None:
+                frame_res = cv2.resize(img, (ANCHO, ALTO))
+                with self.lock:
+                    self.latest_raw_frame = frame_res
+                    self.frame_id += 1
+                self._analizar_frame_ia(frame_res, rastrear=False)
+                self.get_frame_bytes(-1)
+                frames_analizados = 1
+        else:
+            cap_tmp = cv2.VideoCapture(ruta)
+            if cap_tmp and cap_tmp.isOpened():
+                total_f = int(cap_tmp.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+                fps_v = float(cap_tmp.get(cv2.CAP_PROP_FPS) or 24.0)
+                salto = max(1, int(fps_v // 4))  # ~4 evaluaciones por segundo para analizar el clip al instante
+                f_idx = 0
+                max_evaluaciones = 36
+                while frames_analizados < max_evaluaciones:
+                    ok, frame = cap_tmp.read()
+                    if not ok or frame is None:
+                        break
+                    if f_idx % salto == 0:
+                        frame_res = cv2.resize(frame, (ANCHO, ALTO))
+                        with self.lock:
+                            self.latest_raw_frame = frame_res
+                            self.frame_id += 1
+                        self._analizar_frame_ia(frame_res, rastrear=True)
+                        frames_analizados += 1
+                    f_idx += 1
+                cap_tmp.release()
+                self.get_frame_bytes(-1)
+
+        # Activar también el stream continuo con el archivo subido
+        self.cambiar_fuente(tipo, ruta)
+        if self.hilo_lectura is None or not self.hilo_lectura.is_alive():
+            self._abrir_captura(tipo, ruta, reiniciar=False)
+            self.hilo_lectura = threading.Thread(target=self._leer_camara, daemon=True, name="KovaqCamCapture")
+            self.hilo_ia = threading.Thread(target=self._worker_ia_desacoplado, daemon=True, name="KovaqYoloWorker")
+            self.hilo_lectura.start()
+            self.hilo_ia.start()
+
+        # Persistir inmediatamente en Turso/SQLite todos los eventos generados por el análisis instantáneo
+        self.flush_cola_db()
+
+        nuevas_entradas = max(0, self.total_entradas - entradas_antes)
+        nuevos_tomados = max(0, self.total_agarrados - agarrados_antes)
+        nuevos_devueltos = max(0, self.total_devueltos - devueltos_antes)
+
+        return {
+            "ok": True,
+            "tipo": tipo,
+            "frames_analizados": frames_analizados,
+            "nuevos_clientes": nuevas_entradas,
+            "nuevos_tomados": nuevos_tomados,
+            "nuevos_devueltos": nuevos_devueltos,
+            "personas_en_escena": len(self.overlay_data.get("personas", [])),
+            "resumen": (
+                f"Analizados {frames_analizados} fotogramas clave al instante: "
+                f"{ len(self.overlay_data.get('personas', [])) } vectores en escena, "
+                f"{nuevos_tomados} tomas y {nuevos_devueltos} devoluciones detectadas."
+            )
+        }
+
     def repetir(self):
         if self.fuente == "video" and self.ruta:
             self.cambiar_fuente("video", self.ruta)
@@ -987,25 +1069,43 @@ class CameraService:
         except queue.Full:
             pass
 
+    def _ejecutar_tarea_db(self, tarea, args):
+        if tarea == "trafico":
+            guardar_trafico()
+        elif tarea == "tomado":
+            guardar_producto_tomado(*args)
+        elif tarea == "devuelto":
+            guardar_producto_devuelto(*args)
+        elif tarea == "interaccion":
+            guardar_interaccion(*args)
+        elif tarea == "permanencia":
+            guardar_permanencia(*args)
+        elif tarea == "handoff":
+            guardar_handoff_camara(*args)
+        elif tarea == "coordenada":
+            guardar_telemetria_coordenada(*args)
+
+    def flush_cola_db(self):
+        while True:
+            try:
+                tarea, args = self.cola_db.get_nowait()
+                try:
+                    self._ejecutar_tarea_db(tarea, args)
+                except Exception:
+                    pass
+                finally:
+                    self.cola_db.task_done()
+            except queue.Empty:
+                break
+
     def _worker_db_asincrono(self):
         while self.corriendo:
             try:
                 tarea, args = self.cola_db.get(timeout=0.2)
-                if tarea == "trafico":
-                    guardar_trafico()
-                elif tarea == "tomado":
-                    guardar_producto_tomado(*args)
-                elif tarea == "devuelto":
-                    guardar_producto_devuelto(*args)
-                elif tarea == "interaccion":
-                    guardar_interaccion(*args)
-                elif tarea == "permanencia":
-                    guardar_permanencia(*args)
-                elif tarea == "handoff":
-                    guardar_handoff_camara(*args)
-                elif tarea == "coordenada":
-                    guardar_telemetria_coordenada(*args)
-                self.cola_db.task_done()
+                try:
+                    self._ejecutar_tarea_db(tarea, args)
+                finally:
+                    self.cola_db.task_done()
             except queue.Empty:
                 continue
             except Exception as e:

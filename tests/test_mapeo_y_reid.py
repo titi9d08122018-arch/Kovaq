@@ -152,3 +152,88 @@ def test_endpoints_planograma_promociones_resumen_ejecutivo_y_marketing_ai(clien
     r_chat = client.post("/api/chat", json={"mensaje": "¿Funcionan las promociones y qué pasa a último momento?", "modo": "publicidad"})
     assert r_chat.status_code == 200
     assert len(r_chat.json()["respuesta"]) > 30
+
+
+def test_analisis_temporal_por_dias_semanas_meses_y_rango_fechas(client):
+    """
+    Verifica que:
+    1) Los datos históricos simulados de 90 días estén sembrados en la base de datos.
+    2) El endpoint `/api/analytics/serie_temporal` funcione agrupando por `dia`, `semana` y `mes`.
+    3) El filtrado por rango de fechas personalizado (`fecha_inicio` y `fecha_fin`) recalcule los dashboards
+       (`/api/stats`, `/api/analytics/resumen_publicidad`, `/api/analytics/heatmap_hora`, `/api/analytics/inventario`).
+    """
+    _login(client)
+
+    # 1. Serie temporal por días (últimos 30 días)
+    r_dia = client.get("/api/analytics/serie_temporal?agrupacion=dia&dias=30")
+    assert r_dia.status_code == 200
+    datos_dia = r_dia.json()
+    assert datos_dia["agrupacion"] == "dia"
+    assert len(datos_dia["labels"]) >= 15
+    assert sum(datos_dia["interacciones"]) > 0
+    assert sum(datos_dia["llevados"]) > 0
+
+    # 2. Serie temporal por semanas (últimos 90 días)
+    r_sem = client.get("/api/analytics/serie_temporal?agrupacion=semana&dias=90")
+    assert r_sem.status_code == 200
+    datos_sem = r_sem.json()
+    assert datos_sem["agrupacion"] == "semana"
+    assert len(datos_sem["labels"]) >= 8
+    assert all("-S" in lbl for lbl in datos_sem["labels"])
+
+    # 3. Serie temporal por meses (últimos 90 días)
+    r_mes = client.get("/api/analytics/serie_temporal?agrupacion=mes&dias=90")
+    assert r_mes.status_code == 200
+    datos_mes = r_mes.json()
+    assert datos_mes["agrupacion"] == "mes"
+    assert len(datos_mes["labels"]) >= 2
+
+    # 4. Selección de rango de fechas personalizado por el cliente
+    from datetime import datetime, timedelta
+    hoy = datetime.now()
+    f_ini = (hoy - timedelta(days=14)).strftime("%Y-%m-%d")
+    f_fin = (hoy - timedelta(days=2)).strftime("%Y-%m-%d")
+
+    r_stats_rango = client.get(f"/api/stats?fecha_inicio={f_ini}&fecha_fin={f_fin}")
+    assert r_stats_rango.status_code == 200
+    st_rango = r_stats_rango.json()
+    assert st_rango["interacciones"] > 0
+    assert st_rango["tomados"] > 0
+
+    r_pub_rango = client.get(f"/api/analytics/resumen_publicidad?fecha_inicio={f_ini}&fecha_fin={f_fin}")
+    assert r_pub_rango.status_code == 200
+    pub_rango = r_pub_rango.json()
+    assert pub_rango["comportamiento_visual"]["mira_y_compra"]["casos"] >= 1
+    assert len(pub_rango["zonas_calientes"]) >= 1
+
+    r_inv_rango = client.get(f"/api/analytics/inventario?fecha_inicio={f_ini}&fecha_fin={f_fin}")
+    assert r_inv_rango.status_code == 200
+    assert len(r_inv_rango.json()["productos"]) >= 5
+
+
+def test_subida_y_analisis_inmediato_de_video_al_momento(client):
+    """
+    Verifica que `/api/upload` procese y analice inmediatamente el video o imagen subida
+    al momento (incluso en modo nube), devolviendo el resumen de fotogramas analizados y vectores detectados.
+    """
+    _login(client)
+    import os
+    ruta_demo = os.path.join(os.path.dirname(os.path.dirname(__file__)), "static", "demo_supermercado.mp4")
+    assert os.path.exists(ruta_demo)
+
+    with open(ruta_demo, "rb") as f:
+        r_up = client.post(
+            "/api/upload",
+            files={"archivo": ("demo_supermercado.mp4", f, "video/mp4")},
+        )
+    assert r_up.status_code == 200
+    payload = r_up.json()
+    assert payload["ok"] is True
+    assert payload["tipo"] == "video"
+    assert payload["frames_analizados"] >= 1
+    assert payload["personas_en_escena"] >= 1
+    assert "Analizados" in payload["resumen"]
+    client.post("/api/control", json={"accion": "parar"})
+    import shutil
+    shutil.rmtree("uploads", ignore_errors=True)
+

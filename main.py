@@ -13,7 +13,8 @@ from database import (
     init_db, init_analytics, leer, escribir, pwd_context,
     obtener_camaras_mapa, registrar_o_actualizar_camara_mapa, eliminar_camara_mapa,
     obtener_perchas_mapa, registrar_o_actualizar_percha_mapa,
-    obtener_promociones_percha, registrar_promocion_percha, eliminar_promocion_percha
+    obtener_promociones_percha, registrar_promocion_percha, eliminar_promocion_percha,
+    _construir_filtro_fecha
 )
 from ai_agent import preguntar_a_los_datos
 from analytics import router as analytics_router
@@ -398,8 +399,6 @@ async def api_chat(request: Request):
 @app.post("/api/upload")
 async def api_upload(request: Request, archivo: UploadFile = File(...)):
     await obtener_usuario_actual(request)
-    if MODO != "local":
-        raise HTTPException(status_code=503, detail="La subida de video solo está disponible en modo local")
 
     ext = os.path.splitext(archivo.filename or "")[1].lower()
     if ext in {".mp4", ".avi", ".mov", ".mkv"}:
@@ -418,8 +417,8 @@ async def api_upload(request: Request, archivo: UploadFile = File(...)):
     with open(ruta, "wb") as f:
         f.write(contenido)
 
-    camara.cambiar_fuente(tipo, ruta)
-    return {"ok": True, "tipo": tipo}
+    resultado_analisis = await asyncio.to_thread(camara.procesar_archivo_subido_inmediato, tipo, ruta)
+    return resultado_analisis
 
 
 @app.post("/api/control")
@@ -459,10 +458,11 @@ async def cambiar_fuente_api(request: Request):
 
 
 # ==========================================
-# ESTADÍSTICAS CONSOLIDADAS (1 SOLA QUERY A TURSO)
+# ESTADÍSTICAS CONSOLIDADAS CON FILTRO TEMPORAL (DÍA / SEMANA / MES / RANGO)
 # ==========================================
-def _obtener_stats():
-    fila = leer("""
+def _obtener_stats(dias: int = 30, fecha_inicio: str = None, fecha_fin: str = None):
+    where_ev, params_ev = _construir_filtro_fecha(dias, fecha_inicio, fecha_fin, "creado")
+    fila = leer(f"""
         SELECT
             COALESCE(SUM(CASE WHEN tipo = 'trafico' THEN 1 ELSE 0 END), 0) AS trafico,
             COALESCE(SUM(CASE WHEN tipo = 'permanencia' THEN 1 ELSE 0 END), 0) AS perm_eventos,
@@ -472,12 +472,13 @@ def _obtener_stats():
             COALESCE(SUM(CASE WHEN tipo = 'producto_devuelto' THEN 1 ELSE 0 END), 0) AS devueltos,
             COALESCE(SUM(CASE WHEN tipo = 'handoff_camara' THEN 1 ELSE 0 END), 0) AS handoffs
         FROM eventos
-    """, uno=True)
-    top = leer("""
+        WHERE {where_ev}
+    """, params_ev, uno=True)
+    top = leer(f"""
         SELECT detalle, COUNT(*) FROM eventos
-        WHERE tipo IN ('interaccion', 'producto_tomado')
+        WHERE tipo IN ('interaccion', 'producto_tomado') AND {where_ev}
         GROUP BY detalle ORDER BY COUNT(*) DESC LIMIT 5
-    """)
+    """, params_ev)
     return {
         "trafico": int(fila[0] or 0),
         "permanencia_eventos": int(fila[1] or 0),
@@ -506,10 +507,10 @@ def _texto_resumen(s):
 
 
 @app.get("/api/stats")
-async def api_stats(request: Request):
+async def api_stats(request: Request, dias: int = 30, fecha_inicio: str = None, fecha_fin: str = None):
     await obtener_usuario_actual(request)
     try:
-        s = await asyncio.to_thread(_obtener_stats)
+        s = await asyncio.to_thread(_obtener_stats, dias, fecha_inicio, fecha_fin)
     except Exception:
         raise HTTPException(status_code=500, detail="Error consultando estadísticas")
 
@@ -524,12 +525,12 @@ async def api_live_events(request: Request):
 
 
 # ==========================================
-# VIDEO STREAMING (LOCAL)
+# VIDEO STREAMING (DISPONIBLE EN LOCAL Y AL SUBIR VIDEO EN NUBE)
 # ==========================================
 @app.get("/api/video_feed")
 async def video_feed(request: Request):
     await obtener_usuario_actual(request)
-    if MODO != "local":
+    if MODO != "local" and camara.latest_raw_frame is None:
         raise HTTPException(status_code=503, detail="Video no disponible en modo nube")
 
     async def generar():
