@@ -9,6 +9,8 @@ pyjwt
 python-dotenv
 opencv-python-headless
 ultralytics
+lap
+onnxruntime
 torch
 torchvision
 libsql

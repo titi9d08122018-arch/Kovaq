@@ -287,13 +287,18 @@
                                 <span class="w-2 h-2 rounded-full bg-white animate-ping"></span> EN VIVO
                             </span>
                             <div>
-                                <h3 class="font-title text-sm font-bold text-kovaq-navy m-0">Percha Principal • Góndola 1</h3>
-                                <p class="text-[11px] text-kovaq-slate m-0">Monitoreo y detección continua</p>
+                                <h3 class="font-title text-sm font-bold text-kovaq-navy m-0" id="titulo-camara-activa">CAM-01 • Acceso & Pasillo Bebidas/Snacks</h3>
+                                <p class="text-[11px] text-kovaq-slate m-0">Monitoreo de Perchas ROIs y Re-ID Multi-Cámara</p>
                             </div>
                         </div>
 
-                        <!-- Selector de Fuente de Video -->
-                        <div class="flex items-center gap-2">
+                        <!-- Selector de Cámara del Mapa y Fuente de Video -->
+                        <div class="flex flex-wrap items-center gap-2">
+                            <select id="select-camara-mapa" class="bg-slate-50 border-2 border-kovaq-border text-kovaq-navy text-xs font-bold rounded-xl px-2.5 py-1.5 min-h-[38px] focus:outline-none" onchange="seleccionarCamaraMapa(this.value)">
+                                <option value="CAM-01" selected>CAM-01 • Pasillo Bebidas/Snacks</option>
+                                <option value="CAM-02">CAM-02 • Pasillo Central Lácteos/Frescos</option>
+                                <option value="CAM-03">CAM-03 • Fondo Limpieza & Cajas</option>
+                            </select>
                             <select id="select-camara" class="bg-white border-2 border-kovaq-border text-kovaq-navy text-xs font-bold rounded-xl px-2.5 py-1.5 min-h-[38px] focus:outline-none" onchange="cambiarFuenteSeleccionada()">
                                 <option value="video" selected>Video Supermercado (Demo)</option>
                                 <option value="webcam">Cámara Web USB (En Vivo)</option>
@@ -305,17 +310,18 @@
                         </div>
                     </div>
 
-                    <!-- Escenario de Video 100% Nítido y Fluido -->
+                    <!-- Escenario de Video 100% Nítido y Fluido con Overlay de Perchas y Personas -->
                     <div class="hud-stage p-0 min-h-[460px] relative" id="yolo-stage-container">
                         <div id="video-container" class="w-full h-full flex items-center justify-center relative min-h-[460px]">
-                            <!-- Video de respaldo ejecutado de forma nativa en el navegador (100% fluido, 60 FPS, cero lag) -->
+                            <!-- Video de respaldo ejecutado de forma nativa en el navegador -->
                             <video id="demo-video-player" autoplay loop muted playsinline class="w-full h-auto max-h-[460px] object-contain block">
                                 <source src="/static/demo_supermercado.mp4" type="video/mp4">
                             </video>
                             <div class="absolute top-3 right-3 px-3 py-1 bg-kovaq-navy/90 text-white text-xs font-mono-num font-bold rounded-lg border border-white/20 shadow-sm z-10 flex items-center gap-1.5">
-                                <span class="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span> Video de Respaldo Supermercado
+                                <span class="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span> <span id="badge-video-mode">Tracking Multi-Cámara Activo</span>
                             </div>
                         </div>
+                        <canvas id="yolo-hud-canvas" width="480" height="360" class="hud-overlay w-full h-full object-contain"></canvas>
                     </div>
 
                     <!-- Footer de Entrada de Medios -->
@@ -331,19 +337,84 @@
                     </div>
                 </div>
 
-                <!-- Banner Informativo de Transmisión Nítida (Sin lag ni estorbos visuales) -->
-                <div class="p-4 bg-white border border-kovaq-border rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs text-kovaq-navy shadow-sm">
-                    <div class="flex items-center gap-2.5">
-                        <span class="w-3 h-3 rounded-full bg-emerald-500 animate-ping shrink-0"></span>
+                <!-- =========================================================================
+                   PLANO TOPOLÓGICO 2D DEL LUGAR & TRACKEO MULTI-CÁMARA (RE-ID "SOBRE EL PAPEL")
+                ========================================================================= -->
+                <div class="card-kovaq p-5 space-y-4 border-l-4 border-l-kovaq-navy">
+                    <div class="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-kovaq-border">
                         <div>
-                            <strong class="font-title text-kovaq-navy block text-sm">Flujo de Video en Vivo 100% Nítido a 30 FPS</strong>
-                            <span class="text-kovaq-slate text-xs">El video se transmite limpio sin gráficos superpuestos. El registro de tomas y devoluciones se encuentra en Analítica de Percha.</span>
+                        <div class="flex flex-wrap items-center gap-2">
+                            <span class="bg-emerald-100 text-emerald-800 text-[10px] font-mono-num font-bold px-2.5 py-0.5 rounded-full">
+                                <i class="bi bi-shield-check mr-1"></i> PRIVACIDAD: COORDENADAS ANÓNIMAS 2D (CERO BIOMETRÍA)
+                            </span>
+                            <span class="bg-kovaq-navy text-white text-[10px] font-mono-num font-bold px-2.5 py-0.5 rounded-full">
+                                FILTRO CLIENTE REAL: PUERTA → CAJA (EMPLEADOS EXCLUIDOS)
+                            </span>
+                            <span id="badge-sim-status" class="bg-orange-100 text-kovaq-orange text-[10px] font-mono-num font-bold px-2.5 py-0.5 rounded-full">
+                                GEMELO DIGITAL ACTIVO
+                            </span>
+                        </div>
+                        <h3 class="font-title text-base font-bold text-kovaq-navy m-0 mt-1">
+                            Plano 2D de Zonas Calientes / Frías, Flujo Puerta → Caja y Orientación de Cabeza hacia Perchas
+                        </h3>
+                        <p class="text-xs text-kovaq-slate m-0">
+                            No se registran rostros ni identidades: cada cliente se procesa como un vector espacial anónimo (<code class="text-kovaq-orange font-bold">S#ID</code>) desde cámaras elevadas, midiendo giros de cabeza, agachadas y atención a promociones.
+                        </p>
+                        </div>
+
+                        <div class="flex items-center gap-2">
+                            <button type="button" id="btn-toggle-sim" onclick="toggleSimulacionPapel()" class="btn-kovaq-pill text-xs py-2 px-4 min-h-[38px]">
+                                <i class="bi bi-cpu-fill"></i> <span id="txt-toggle-sim">Simulación Activa</span>
+                            </button>
+                            <button type="button" onclick="cambiarModulo('tab-percha', document.querySelectorAll('.tab-kovaq-pill')[1])" class="btn-kovaq-outline text-xs py-2 px-4 rounded-pill shrink-0 flex items-center gap-1.5 font-bold">
+                                <span>Auditoría de Tomas</span>
+                                <i class="bi bi-arrow-right text-kovaq-orange"></i>
+                            </button>
                         </div>
                     </div>
-                    <button type="button" onclick="cambiarModulo('tab-percha', document.querySelectorAll('.tab-kovaq-pill')[1])" class="btn-kovaq-outline text-xs py-2 px-4 rounded-pill shrink-0 flex items-center gap-1.5 font-bold">
-                        <span>Ver Auditoría de Tomas</span>
-                        <i class="bi bi-arrow-right text-kovaq-orange"></i>
-                    </button>
+
+                    <!-- Lienzo Interactivo 2D del Supermercado -->
+                    <div class="relative rounded-2xl overflow-hidden border-2 border-kovaq-border bg-[#08172b]" style="height: 360px;">
+                        <canvas id="store-map-canvas" width="920" height="360" class="w-full h-full block"></canvas>
+                        <div class="absolute bottom-2.5 left-3 right-3 flex flex-wrap items-center justify-between gap-2 text-[11px] text-white/90 bg-kovaq-navy/85 backdrop-blur px-3 py-1.5 rounded-xl border border-white/10">
+                            <div class="flex flex-wrap items-center gap-3">
+                                <span class="flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded-full bg-emerald-400 inline-block"></span> Persona Trackeada (G#ID)</span>
+                                <span class="flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded-full bg-kovaq-orange inline-block"></span> En Toma de Producto</span>
+                                <span class="flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded-full bg-blue-400 inline-block"></span> Devolución en Percha</span>
+                                <span class="flex items-center gap-1.5"><span class="w-3 h-1.5 bg-amber-400/60 border border-amber-300 inline-block"></span> Góndola / Percha Mapeada</span>
+                            </div>
+                            <span class="font-mono-num text-[10px] text-orange-300 font-bold" id="map-handoff-counter">
+                                0 Handoffs Re-ID Registrados
+                            </span>
+                        </div>
+                    </div>
+
+                    <!-- Registro en Vivo de Transiciones entre Cámaras (Handoffs Re-ID) -->
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-3 pt-1">
+                        <div class="p-3 bg-slate-50 border border-kovaq-border rounded-xl">
+                            <div class="flex items-center justify-between mb-1.5">
+                                <span class="text-[11px] font-bold uppercase text-kovaq-navy flex items-center gap-1.5">
+                                    <i class="bi bi-arrow-left-right text-kovaq-orange"></i> Últimos Traspasos entre Cámaras (Handoffs Re-ID)
+                                </span>
+                                <span class="text-[10px] font-mono-num text-emerald-700 font-bold">Continuidad 100%</span>
+                            </div>
+                            <div id="handoff-feed-list" class="space-y-1.5 max-h-28 overflow-y-auto text-xs font-mono-num text-kovaq-navy">
+                                <div class="text-kovaq-slate text-[11px] font-sans">Monitoreando cruces entre zonas de cámaras (CAM-01 ↔ CAM-02 ↔ CAM-03)...</div>
+                            </div>
+                        </div>
+
+                        <div class="p-3 bg-slate-50 border border-kovaq-border rounded-xl">
+                            <div class="flex items-center justify-between mb-1.5">
+                                <span class="text-[11px] font-bold uppercase text-kovaq-navy flex items-center gap-1.5">
+                                    <i class="bi bi-person-bounding-box text-emerald-600"></i> Clientes Activos en el Plano 2D
+                                </span>
+                                <span class="text-[10px] font-mono-num text-kovaq-slate" id="active-tracked-badge">0 activos</span>
+                            </div>
+                            <div id="active-persons-list" class="space-y-1.5 max-h-28 overflow-y-auto text-xs text-kovaq-navy">
+                                <div class="text-kovaq-slate text-[11px]">Sincronizando identidades globales...</div>
+                            </div>
+                        </div>
+                    </div>
                 </div>
 
             </div>
@@ -418,28 +489,26 @@
                     <p class="text-xs text-kovaq-slate mt-2 m-0">Porcentaje de visitantes que interactuaron físicamente.</p>
                 </div>
 
-                <!-- Feed de Alertas en Tiempo Real -->
-                <div class="card-kovaq p-5">
+                <!-- Diagnóstico Real de los 10 Segundos del Video de Respaldo (Cámara Elevada) -->
+                <div class="card-kovaq p-5 border-l-4 border-l-emerald-500">
                     <div class="flex items-center justify-between mb-3 pb-2 border-b border-kovaq-border">
                         <h4 class="font-title text-sm font-bold text-kovaq-navy m-0 flex items-center gap-1.5">
-                            <i class="bi bi-bell-fill text-kovaq-orange"></i> Alertas In-Store Activas
+                            <i class="bi bi-film text-kovaq-orange"></i> Análisis de los 10s del Video (Cámara 12 Elevada)
                         </h4>
-                        <span class="text-[10px] font-mono-num text-kovaq-slate">En Vivo</span>
+                        <span class="text-[10px] font-mono-num bg-emerald-50 text-emerald-800 px-2 py-0.5 rounded font-bold">240 Frames • 24 FPS</span>
                     </div>
-                    <div class="space-y-2.5 text-xs">
-                        <div class="p-2.5 bg-orange-50 border border-orange-200 rounded-xl flex items-start gap-2 text-kovaq-navy">
-                            <i class="bi bi-lightning-charge-fill text-kovaq-orange text-sm shrink-0 mt-0.5"></i>
-                            <div>
-                                <strong class="block text-kovaq-navy font-title">Alta Afluencia en Percha</strong>
-                                <span class="text-kovaq-slate">Pasillo 1 superó el umbral de 15 personas simultáneas.</span>
-                            </div>
+                    <div class="space-y-2 text-xs" id="video-10s-breakdown">
+                        <div class="p-2 bg-orange-50 border border-orange-200 rounded-xl text-kovaq-navy">
+                            <strong class="block font-title text-[11px] text-kovaq-orange">0.0s–6.8s • Vector S#101 (Cliente Puerta → Pasillo)</strong>
+                            <span class="text-kovaq-slate text-[11px]">Gira cabeza a <strong>PER-A1 (Cereales)</strong>, toma Kellogg's (Promo 2x1), mira 4.2s y <strong>lo devuelve a último momento</strong>.</span>
                         </div>
-                        <div class="p-2.5 bg-blue-50 border border-blue-200 rounded-xl flex items-start gap-2 text-kovaq-navy">
-                            <i class="bi bi-arrow-repeat text-blue-600 text-sm shrink-0 mt-0.5"></i>
-                            <div>
-                                <strong class="block text-kovaq-navy font-title">Devolución Frecuente</strong>
-                                <span class="text-kovaq-slate">Bebidas registra 3 devoluciones en 10 minutos. Evaluar precio.</span>
-                            </div>
+                        <div class="p-2 bg-emerald-50 border border-emerald-200 rounded-xl text-kovaq-navy">
+                            <strong class="block font-title text-[11px] text-emerald-800">1.2s–8.5s • Vector S#102 (Cliente con Canasta)</strong>
+                            <span class="text-kovaq-slate text-[11px]">Gira cabeza a <strong>PER-A2 (Conservas)</strong>, mira exhibidor amarillo 4.6s y <strong>lleva Salsa de Tomate (Mira y Compra)</strong>.</span>
+                        </div>
+                        <div class="p-2 bg-slate-100 border border-slate-300 rounded-xl text-kovaq-navy">
+                            <strong class="block font-title text-[11px] text-slate-700">5.2s–9.8s • STAFF-01 (Repositora con Delantal y Carro)</strong>
+                            <span class="text-kovaq-slate text-[11px]">Sin recorrido Puerta → Caja. <strong>Excluida automáticamente</strong> para no contaminar KPIs de clientes.</span>
                         </div>
                     </div>
                 </div>
@@ -506,6 +575,96 @@
         </div>
 
         <!-- =====================================================================
+           DASHBOARD EJECUTIVO DE PUBLICIDAD IN-STORE: ZONAS CALIENTES/FRÍAS,
+           ATENCIÓN VISUAL (GIRO CABEZA / AGACHARSE / SUBIR) Y DECISIÓN DE COMPRA
+        ===================================================================== -->
+        <div class="grid grid-cols-1 lg:grid-cols-12 gap-5">
+            <!-- Matriz de Atención Visual y Decisión ante Publicidad POP (7 cols) -->
+            <div class="lg:col-span-7 card-kovaq p-5 space-y-4 border-l-4 border-l-kovaq-navy">
+                <div class="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-kovaq-border">
+                    <div>
+                        <h3 class="font-title text-base font-bold text-kovaq-navy m-0 flex items-center gap-2">
+                            <i class="bi bi-eye-fill text-kovaq-orange"></i> Matriz de Atención Visual y Decisión de Compra (Clientes Puerta → Caja)
+                        </h3>
+                        <p class="text-xs text-kovaq-slate m-0">Clasifica si el cliente giró la cabeza hacia la publicidad de la percha, cuánto miró y qué decidió.</p>
+                    </div>
+                    <span class="bg-emerald-50 text-emerald-800 text-[10px] font-mono-num font-bold px-2.5 py-1 rounded-full border border-emerald-200" id="badge-staff-excluido">
+                        Staff Excluido: 1 repositora
+                    </span>
+                </div>
+
+                <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                    <div class="p-3 bg-emerald-50 border border-emerald-200 rounded-xl">
+                        <span class="text-[10px] font-bold uppercase text-emerald-900 block">1. Mira Promo y Compra</span>
+                        <strong class="text-2xl font-extrabold text-kovaq-navy font-mono-num block mt-1" id="kpi-mira-compra">14</strong>
+                        <span class="text-[10px] text-kovaq-slate block mt-0.5" id="kpi-mira-compra-dwell">Mirada media: 4.4s</span>
+                    </div>
+                    <div class="p-3 bg-slate-50 border border-kovaq-border rounded-xl">
+                        <span class="text-[10px] font-bold uppercase text-kovaq-navy block">2. Compra sin Mirar</span>
+                        <strong class="text-2xl font-extrabold text-kovaq-navy font-mono-num block mt-1" id="kpi-no-mira-compra">8</strong>
+                        <span class="text-[10px] text-kovaq-slate block mt-0.5">Hábito directo (<1.5s)</span>
+                    </div>
+                    <div class="p-3 bg-amber-50 border border-amber-200 rounded-xl">
+                        <span class="text-[10px] font-bold uppercase text-amber-900 block">3. Solo Mira (No Lleva)</span>
+                        <strong class="text-2xl font-extrabold text-kovaq-navy font-mono-num block mt-1" id="kpi-solo-mira">11</strong>
+                        <span class="text-[10px] text-kovaq-slate block mt-0.5">Fricción de precio/promo</span>
+                    </div>
+                    <div class="p-3 bg-orange-50 border border-orange-200 rounded-xl">
+                        <span class="text-[10px] font-bold uppercase text-kovaq-orange block">4. Deja a Último Momento</span>
+                        <strong class="text-2xl font-extrabold text-kovaq-orange font-mono-num block mt-1" id="kpi-ultimo-momento">5</strong>
+                        <span class="text-[10px] text-kovaq-slate block mt-0.5">Elige otro tras comparar</span>
+                    </div>
+                </div>
+
+                <!-- Orientación de Cabeza y Ergonomía de Niveles de Percha -->
+                <div class="p-3.5 bg-slate-50 border border-kovaq-border rounded-xl flex flex-wrap items-center justify-between gap-3 text-xs">
+                    <div class="flex items-center gap-2">
+                        <i class="bi bi-person-bounding-box text-kovaq-orange text-base"></i>
+                        <div>
+                            <strong class="text-kovaq-navy font-title block">Biomecánica Anónima frente a Percha (Cámara en Altura)</strong>
+                            <span class="text-kovaq-slate text-[11px]">Dirección de cabeza y postura respecto a los niveles del planograma</span>
+                        </div>
+                    </div>
+                    <div class="flex flex-wrap items-center gap-2 font-mono-num text-[11px]">
+                        <span class="bg-white border border-kovaq-border px-2.5 py-1 rounded-lg text-kovaq-navy font-bold">
+                            ↔ Giro a Percha: <strong class="text-kovaq-orange" id="postura-giro">22</strong>
+                        </span>
+                        <span class="bg-white border border-kovaq-border px-2.5 py-1 rounded-lg text-kovaq-navy font-bold">
+                            ↑ Sube Cabeza (Nivel Alto): <strong class="text-blue-700" id="postura-arriba">11</strong>
+                        </span>
+                        <span class="bg-white border border-kovaq-border px-2.5 py-1 rounded-lg text-kovaq-navy font-bold">
+                            ↓ Se Agacha (Nivel Bajo): <strong class="text-emerald-700" id="postura-agacha">6</strong>
+                        </span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Zonas Calientes vs Zonas Frías y Productos Más Llevados (5 cols) -->
+            <div class="lg:col-span-5 card-kovaq p-5 space-y-3 border-l-4 border-l-kovaq-orange">
+                <div class="flex items-center justify-between pb-2 border-b border-kovaq-border">
+                    <h3 class="font-title text-base font-bold text-kovaq-navy m-0 flex items-center gap-2">
+                        <i class="bi bi-fire text-kovaq-orange"></i> Zonas Calientes vs Frías & Top Llevados
+                    </h3>
+                    <span class="text-[10px] font-mono-num text-kovaq-slate">Resumen Ejecutivo</span>
+                </div>
+                <div class="space-y-2 text-xs" id="ejecutivo-zonas-container">
+                    <div class="p-2.5 bg-orange-50 border border-orange-200 rounded-xl">
+                        <span class="text-[10px] font-bold uppercase text-kovaq-orange block">🔥 Zonas Calientes (Mayor Atracción POP)</span>
+                        <div id="lista-zonas-calientes" class="font-bold text-kovaq-navy mt-1">Cargando zonas calientes...</div>
+                    </div>
+                    <div class="p-2.5 bg-blue-50 border border-blue-200 rounded-xl">
+                        <span class="text-[10px] font-bold uppercase text-blue-800 block">❄️ Zonas Frías (Baja Visibilidad / Requiere Impulso)</span>
+                        <div id="lista-zonas-frias" class="font-bold text-kovaq-navy mt-1">Cargando zonas frías...</div>
+                    </div>
+                    <div class="p-2.5 bg-emerald-50 border border-emerald-200 rounded-xl">
+                        <span class="text-[10px] font-bold uppercase text-emerald-800 block">🛍️ Productos Más Llevados vs Cambio Último Momento</span>
+                        <div id="lista-productos-clave" class="text-kovaq-navy mt-1">Sincronizando con planograma...</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- =====================================================================
            MONITOR DE TOMAS Y DEVOLUCIONES EN GÓNDOLA (INTERACCIÓN FÍSICA)
            Auditoría en tiempo real reubicada en Analítica de Percha para mantener el video 100% nítido
         ===================================================================== -->
@@ -567,23 +726,25 @@
                         <tr>
                             <th class="p-2.5 font-bold">Hora</th>
                             <th class="p-2.5 font-bold">Evento Disparado</th>
-                            <th class="p-2.5 font-bold">Cliente</th>
+                            <th class="p-2.5 font-bold">Cliente (Global Re-ID)</th>
+                            <th class="p-2.5 font-bold">Percha / Cámara</th>
                             <th class="p-2.5 font-bold">Producto / Artículo</th>
                             <th class="p-2.5 font-bold">Confianza</th>
-                            <th class="p-2.5 font-bold">Coordenadas Góndola</th>
                         </tr>
                     </thead>
                     <tbody id="yolo-event-log-body" class="divide-y divide-kovaq-border font-mono-num text-[11px] text-kovaq-navy bg-white">
                         <tr>
                             <td colspan="6" class="p-3.5 text-center text-kovaq-slate font-sans">
-                                <i class="bi bi-hourglass-split text-kovaq-orange mr-1"></i> Esperando eventos de tomas o devoluciones de producto desde la percha...
+                                <i class="bi bi-hourglass-split text-kovaq-orange mr-1"></i> Esperando eventos de tomas, devoluciones o handoffs desde las perchas...
                             </td>
                         </tr>
                     </tbody>
                 </table>
             </div>
         </div>
-           Integrado como tarjetas de rendimiento analítico continuo
+
+        <!-- =====================================================================
+           RENDIMIENTO DE PERCHA POR BLOQUES HORARIOS (CONECTADO A TURSO)
         ===================================================================== -->
         <div class="card-kovaq p-6 space-y-4">
             <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-3 border-b border-kovaq-border">
@@ -607,25 +768,25 @@
                         <span class="font-title text-xs font-bold text-kovaq-navy flex items-center gap-1.5">
                             🌅 Mañana <span class="text-[10px] text-kovaq-slate font-mono-num">(06:00 - 11:00)</span>
                         </span>
-                        <span class="bg-blue-100 text-blue-900 text-[10px] font-mono-num font-bold px-2 py-0.5 rounded">
+                        <span id="franja-manana-pct" class="bg-blue-100 text-blue-900 text-[10px] font-mono-num font-bold px-2 py-0.5 rounded">
                             28% Tráfico
                         </span>
                     </div>
                     <div class="space-y-1.5 text-xs text-kovaq-navy font-mono-num">
                         <div class="flex justify-between">
                             <span class="text-kovaq-slate font-sans">Tráfico:</span>
-                            <strong>102 clientes</strong>
+                            <strong id="franja-manana-trafico">0 clientes</strong>
                         </div>
                         <div class="flex justify-between">
                             <span class="text-kovaq-slate font-sans">Retención:</span>
-                            <strong class="text-kovaq-orange">11.8 s</strong>
+                            <strong id="franja-manana-retencion" class="text-kovaq-orange">0.0 s</strong>
                         </div>
                         <div class="flex justify-between">
                             <span class="text-kovaq-slate font-sans">Conversión:</span>
-                            <strong class="text-emerald-700">6.4%</strong>
+                            <strong id="franja-manana-conv" class="text-emerald-700">0.0%</strong>
                         </div>
                         <div class="pt-2 border-t border-slate-200 text-[11px] font-sans text-kovaq-slate">
-                            Top SKU: <strong class="text-kovaq-navy">Lácteos & Panadería</strong>
+                            Foco: <strong class="text-kovaq-navy">Percha B1 (Lácteos)</strong>
                         </div>
                     </div>
                 </div>
@@ -637,24 +798,24 @@
                             ☀️ Mediodía <span class="text-[10px] text-kovaq-slate font-mono-num">(11:00 - 14:00)</span>
                         </span>
                         <span class="bg-amber-100 text-amber-900 text-[10px] font-mono-num font-bold px-2 py-0.5 rounded">
-                            22% Tráfico
+                            Impulso
                         </span>
                     </div>
                     <div class="space-y-1.5 text-xs text-kovaq-navy font-mono-num">
                         <div class="flex justify-between">
-                            <span class="text-kovaq-slate font-sans">Tráfico:</span>
-                            <strong>79 clientes</strong>
+                            <span class="text-kovaq-slate font-sans">Perchas Activas:</span>
+                            <strong>5 Góndolas</strong>
                         </div>
                         <div class="flex justify-between">
-                            <span class="text-kovaq-slate font-sans">Retención:</span>
-                            <strong class="text-kovaq-orange">8.4 s</strong>
+                            <span class="text-kovaq-slate font-sans">Cámaras Re-ID:</span>
+                            <strong class="text-kovaq-orange">3 Conectadas</strong>
                         </div>
                         <div class="flex justify-between">
-                            <span class="text-kovaq-slate font-sans">Conversión:</span>
-                            <strong class="text-emerald-700">7.2%</strong>
+                            <span class="text-kovaq-slate font-sans">Continuidad:</span>
+                            <strong class="text-emerald-700">100%</strong>
                         </div>
                         <div class="pt-2 border-t border-slate-200 text-[11px] font-sans text-kovaq-slate">
-                            Top SKU: <strong class="text-kovaq-navy">Bebidas Frías & Snacks</strong>
+                            Foco: <strong class="text-kovaq-navy">Percha A1 & A2 (Bebidas/Snacks)</strong>
                         </div>
                     </div>
                 </div>
@@ -663,27 +824,27 @@
                 <div class="bg-slate-50 border-2 border-kovaq-border hover:border-kovaq-orange rounded-2xl p-4 transition-all">
                     <div class="flex items-center justify-between mb-2">
                         <span class="font-title text-xs font-bold text-kovaq-navy flex items-center gap-1.5">
-                            🌇 Tarde <span class="text-[10px] text-kovaq-slate font-mono-num">(14:00 - 18:00)</span>
+                            🌇 Tarde <span class="text-[10px] text-kovaq-slate font-mono-num">(12:00 - 18:00)</span>
                         </span>
-                        <span class="bg-orange-100 text-kovaq-orange text-[10px] font-mono-num font-bold px-2 py-0.5 rounded">
-                            Pico 34%
+                        <span id="franja-tarde-pct" class="bg-orange-100 text-kovaq-orange text-[10px] font-mono-num font-bold px-2 py-0.5 rounded">
+                            45% Tráfico
                         </span>
                     </div>
                     <div class="space-y-1.5 text-xs text-kovaq-navy font-mono-num">
                         <div class="flex justify-between">
                             <span class="text-kovaq-slate font-sans">Tráfico:</span>
-                            <strong>122 clientes</strong>
+                            <strong id="franja-tarde-trafico">0 clientes</strong>
                         </div>
                         <div class="flex justify-between">
                             <span class="text-kovaq-slate font-sans">Retención:</span>
-                            <strong class="text-kovaq-orange">17.2 s</strong>
+                            <strong id="franja-tarde-retencion" class="text-kovaq-orange">0.0 s</strong>
                         </div>
                         <div class="flex justify-between">
                             <span class="text-kovaq-slate font-sans">Conversión:</span>
-                            <strong class="text-emerald-700">8.9%</strong>
+                            <strong id="franja-tarde-conv" class="text-emerald-700">0.0%</strong>
                         </div>
                         <div class="pt-2 border-t border-slate-200 text-[11px] font-sans text-kovaq-slate">
-                            Top SKU: <strong class="text-kovaq-navy">Alimentos Familiares</strong>
+                            Foco: <strong class="text-kovaq-navy">Percha B2 (Frescos)</strong>
                         </div>
                     </div>
                 </div>
@@ -692,27 +853,27 @@
                 <div class="bg-slate-50 border-2 border-kovaq-border hover:border-kovaq-navy rounded-2xl p-4 transition-all">
                     <div class="flex items-center justify-between mb-2">
                         <span class="font-title text-xs font-bold text-kovaq-navy flex items-center gap-1.5">
-                            🌙 Noche <span class="text-[10px] text-kovaq-slate font-mono-num">(18:00 - 23:00)</span>
+                            🌙 Noche <span class="text-[10px] text-kovaq-slate font-mono-num">(18:00 - 06:00)</span>
                         </span>
-                        <span class="bg-indigo-100 text-indigo-900 text-[10px] font-mono-num font-bold px-2 py-0.5 rounded">
-                            16% Tráfico
+                        <span id="franja-noche-pct" class="bg-indigo-100 text-indigo-900 text-[10px] font-mono-num font-bold px-2 py-0.5 rounded">
+                            27% Tráfico
                         </span>
                     </div>
                     <div class="space-y-1.5 text-xs text-kovaq-navy font-mono-num">
                         <div class="flex justify-between">
                             <span class="text-kovaq-slate font-sans">Tráfico:</span>
-                            <strong>57 clientes</strong>
+                            <strong id="franja-noche-trafico">0 clientes</strong>
                         </div>
                         <div class="flex justify-between">
                             <span class="text-kovaq-slate font-sans">Retención:</span>
-                            <strong class="text-kovaq-orange">12.5 s</strong>
+                            <strong id="franja-noche-retencion" class="text-kovaq-orange">0.0 s</strong>
                         </div>
                         <div class="flex justify-between">
                             <span class="text-kovaq-slate font-sans">Conversión:</span>
-                            <strong class="text-emerald-700">4.8%</strong>
+                            <strong id="franja-noche-conv" class="text-emerald-700">0.0%</strong>
                         </div>
                         <div class="pt-2 border-t border-slate-200 text-[11px] font-sans text-kovaq-slate">
-                            Top SKU: <strong class="text-kovaq-navy">Impulso & Reposición</strong>
+                            Foco: <strong class="text-kovaq-navy">Percha C1 (Hogar & Limpieza)</strong>
                         </div>
                     </div>
                 </div>
@@ -1224,41 +1385,155 @@
             <!-- Cámaras Registradas -->
             <div class="lg:col-span-7 card-kovaq p-5 space-y-3">
                 <div class="flex items-center justify-between pb-2 border-b border-kovaq-border">
-                    <h3 class="font-title text-sm font-bold text-kovaq-navy m-0">Cámaras Conectadas</h3>
-                    <span class="text-xs text-kovaq-slate font-mono-num">2 Dispositivos</span>
+                    <h3 class="font-title text-sm font-bold text-kovaq-navy m-0">Cámaras Mapeadas en el Plano 2D</h3>
+                    <span class="text-xs text-kovaq-slate font-mono-num" id="config-camaras-count">3 Dispositivos</span>
                 </div>
                 <div class="overflow-x-auto">
                     <table class="w-full text-left text-xs font-sans">
                         <thead class="bg-slate-100 text-kovaq-navy text-[10px] uppercase font-bold tracking-wider">
                             <tr>
-                                <th class="p-2.5">Góndola</th>
-                                <th class="p-2.5">Ruta</th>
+                                <th class="p-2.5">ID / Góndola</th>
+                                <th class="p-2.5">Ruta / Stream</th>
+                                <th class="p-2.5">Posición 2D</th>
                                 <th class="p-2.5">Estado</th>
                                 <th class="p-2.5 text-right">Acción</th>
                             </tr>
                         </thead>
                         <tbody id="tabla-camaras-body" class="divide-y divide-kovaq-border text-kovaq-navy font-medium">
-                            <tr>
-                                <td class="p-2.5 font-bold">Góndola 1 • Pasillo Central</td>
-                                <td class="p-2.5 font-mono text-kovaq-slate">USB Video Device (0)</td>
-                                <td class="p-2.5"><span class="bg-emerald-100 text-emerald-800 text-[10px] px-2 py-0.5 rounded font-bold">Activa</span></td>
-                                <td class="p-2.5 text-right">
-                                    <button class="text-slate-400 hover:text-red-600 transition-colors" onclick="eliminarFila(this)"><i class="bi bi-trash"></i></button>
-                                </td>
-                            </tr>
-                            <tr>
-                                <td class="p-2.5 font-bold">Góndola 2 • Pasillo Refrigerados</td>
-                                <td class="p-2.5 font-mono text-kovaq-slate">rtsp://192.168.1.120:554</td>
-                                <td class="p-2.5"><span class="bg-emerald-100 text-emerald-800 text-[10px] px-2 py-0.5 rounded font-bold">Activa</span></td>
-                                <td class="p-2.5 text-right">
-                                    <button class="text-slate-400 hover:text-red-600 transition-colors" onclick="eliminarFila(this)"><i class="bi bi-trash"></i></button>
-                                </td>
-                            </tr>
                         </tbody>
                     </table>
                 </div>
             </div>
 
+        </div>
+
+        <!-- Perchas y Góndolas Mapeadas en el Lugar + Cargador de Planograma y Promociones POP -->
+        <div class="grid grid-cols-1 lg:grid-cols-12 gap-5">
+            <!-- Formulario 1: Subir / Actualizar Planograma de Percha (6 cols) -->
+            <div class="lg:col-span-6 card-kovaq p-5 space-y-4 border-l-4 border-l-kovaq-navy">
+                <div class="pb-2 border-b border-kovaq-border">
+                    <h3 class="font-title text-sm font-bold text-kovaq-navy m-0 flex items-center gap-2">
+                        <i class="bi bi-grid-3x3-gap-fill text-kovaq-orange"></i> Cargar Planograma de Percha (Productos por Nivel)
+                    </h3>
+                    <p class="text-[11px] text-kovaq-slate m-0">Define qué productos están en el nivel Superior (subir cabeza), Medio (altura ojos) e Inferior (agacharse) de cada percha.</p>
+                </div>
+                <form onsubmit="guardarPlanogramaPercha(event)" class="space-y-3 text-xs">
+                    <div class="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                        <div>
+                            <label class="block font-bold text-kovaq-navy mb-1 text-[10px] uppercase">ID Percha</label>
+                            <input type="text" id="plano-id" placeholder="Ej: PER-A1 o PER-D1" required class="w-full bg-slate-50 border border-kovaq-border rounded-xl p-2 font-mono text-kovaq-navy">
+                        </div>
+                        <div>
+                            <label class="block font-bold text-kovaq-navy mb-1 text-[10px] uppercase">Nombre de Góndola</label>
+                            <input type="text" id="plano-nombre" placeholder="Ej: Percha D1 • Galletas" required class="w-full bg-slate-50 border border-kovaq-border rounded-xl p-2 font-medium text-kovaq-navy">
+                        </div>
+                        <div>
+                            <label class="block font-bold text-kovaq-navy mb-1 text-[10px] uppercase">Categoría / Cámara</label>
+                            <div class="flex gap-1">
+                                <input type="text" id="plano-cat" placeholder="Snacks" required class="w-1/2 bg-slate-50 border border-kovaq-border rounded-xl p-2 text-kovaq-navy">
+                                <select id="plano-cam" class="w-1/2 bg-slate-50 border border-kovaq-border rounded-xl p-2 font-bold text-kovaq-navy">
+                                    <option value="CAM-01">CAM-01</option>
+                                    <option value="CAM-02">CAM-02</option>
+                                    <option value="CAM-03">CAM-03</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                        <div>
+                            <label class="block font-bold text-kovaq-navy mb-1 text-[10px] uppercase">↑ Producto Nivel Superior</label>
+                            <input type="text" id="plano-prod-sup" placeholder="Ej: Avena Crujiente 400g" required class="w-full bg-slate-50 border border-kovaq-border rounded-xl p-2 text-kovaq-navy">
+                        </div>
+                        <div>
+                            <label class="block font-bold text-kovaq-navy mb-1 text-[10px] uppercase">👁️ Producto Nivel Medio (Ojos)</label>
+                            <input type="text" id="plano-prod-med" placeholder="Ej: Cereales Kellogg's 500g" required class="w-full bg-slate-50 border border-kovaq-border rounded-xl p-2 text-kovaq-navy">
+                        </div>
+                        <div>
+                            <label class="block font-bold text-kovaq-navy mb-1 text-[10px] uppercase">↓ Producto Nivel Inferior</label>
+                            <input type="text" id="plano-prod-inf" placeholder="Ej: Barras de Cereal Mix" required class="w-full bg-slate-50 border border-kovaq-border rounded-xl p-2 text-kovaq-navy">
+                        </div>
+                    </div>
+                    <button type="submit" class="btn-kovaq-pill text-xs py-2 px-4 w-full">
+                        <i class="bi bi-cloud-arrow-up-fill"></i> Guardar Planograma en Percha
+                    </button>
+                </form>
+            </div>
+
+            <!-- Formulario 2: Cargar Promoción / Publicidad POP en Percha (6 cols) -->
+            <div class="lg:col-span-6 card-kovaq p-5 space-y-4 border-l-4 border-l-kovaq-orange">
+                <div class="pb-2 border-b border-kovaq-border">
+                    <h3 class="font-title text-sm font-bold text-kovaq-navy m-0 flex items-center gap-2">
+                        <i class="bi bi-megaphone-fill text-kovaq-orange"></i> Registrar Promoción o Publicidad en Punto de Venta (POP)
+                    </h3>
+                    <p class="text-[11px] text-kovaq-slate m-0">Indica en qué percha hay publicidad activa y de qué trata para que el dashboard evalúe si atrae miradas y compras.</p>
+                </div>
+                <form onsubmit="guardarPromocionPercha(event)" class="space-y-3 text-xs">
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                        <div>
+                            <label class="block font-bold text-kovaq-navy mb-1 text-[10px] uppercase">Percha Asignada</label>
+                            <select id="promo-percha" class="w-full bg-slate-50 border border-kovaq-border rounded-xl p-2.5 font-bold text-kovaq-navy">
+                                <option value="PER-A1">PER-A1 • Cereales & Desayuno</option>
+                                <option value="PER-A2">PER-A2 • Salsas, Pastas & Conservas</option>
+                                <option value="PER-B1">PER-B1 • Bebidas Frías</option>
+                                <option value="PER-B2">PER-B2 • Lácteos & Refrigerados</option>
+                                <option value="PER-C1">PER-C1 • Snacks, Hogar & Cajas</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block font-bold text-kovaq-navy mb-1 text-[10px] uppercase">Producto Promocionado</label>
+                            <input type="text" id="promo-producto" placeholder="Ej: Cereales Kellogg's 500g" required class="w-full bg-slate-50 border border-kovaq-border rounded-xl p-2.5 text-kovaq-navy">
+                        </div>
+                    </div>
+                    <div class="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                        <div>
+                            <label class="block font-bold text-kovaq-navy mb-1 text-[10px] uppercase">Título de la Promoción</label>
+                            <input type="text" id="promo-titulo" placeholder="Ej: 2x1 en Cereales" required class="w-full bg-slate-50 border border-kovaq-border rounded-xl p-2 text-kovaq-navy">
+                        </div>
+                        <div>
+                            <label class="block font-bold text-kovaq-navy mb-1 text-[10px] uppercase">Tipo de Publicidad POP</label>
+                            <input type="text" id="promo-tipo" placeholder="Ej: Stopper Lateral / Pantalla LED" required class="w-full bg-slate-50 border border-kovaq-border rounded-xl p-2 text-kovaq-navy">
+                        </div>
+                        <div>
+                            <label class="block font-bold text-kovaq-navy mb-1 text-[10px] uppercase">% Descuento</label>
+                            <input type="number" id="promo-desc" value="20" min="0" max="90" class="w-full bg-slate-50 border border-kovaq-border rounded-xl p-2 font-mono-num text-kovaq-navy">
+                        </div>
+                    </div>
+                    <button type="submit" class="btn-kovaq-pill text-xs py-2 px-4 w-full">
+                        <i class="bi bi-stars"></i> Activar Publicidad en Percha y Evaluar Impacto
+                    </button>
+                </form>
+            </div>
+        </div>
+
+        <!-- Tabla de Perchas, Planograma por Niveles y Promociones Activas -->
+        <div class="card-kovaq p-5 space-y-4">
+            <div class="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-kovaq-border">
+                <div>
+                    <h3 class="font-title text-sm font-bold text-kovaq-navy m-0 flex items-center gap-2">
+                        <i class="bi bi-grid-1x2-fill text-kovaq-orange"></i> Planograma Activo de Perchas y Publicidades POP Vinculadas
+                    </h3>
+                    <p class="text-xs text-kovaq-slate m-0">Mapa de perchas con sus productos por nivel (Superior/Medio/Inferior), promociones activas y temperatura comercial.</p>
+                </div>
+                <span class="bg-slate-100 text-kovaq-navy text-xs font-mono-num font-bold px-3 py-1 rounded-full" id="config-perchas-count">
+                    5 Perchas Mapeadas
+                </span>
+            </div>
+            <div class="overflow-x-auto">
+                <table class="w-full text-left text-xs font-sans">
+                    <thead class="bg-slate-100 text-kovaq-navy text-[10px] uppercase font-bold tracking-wider">
+                        <tr>
+                            <th class="p-2.5">ID Percha</th>
+                            <th class="p-2.5">Nombre / Ubicación</th>
+                            <th class="p-2.5">Planograma por Niveles (Arriba / Ojos / Abajo)</th>
+                            <th class="p-2.5">Publicidad POP Activa</th>
+                            <th class="p-2.5">Zona Térmica</th>
+                            <th class="p-2.5">Tomas / Devoluciones</th>
+                        </tr>
+                    </thead>
+                    <tbody id="tabla-perchas-config-body" class="divide-y divide-kovaq-border text-kovaq-navy font-medium">
+                    </tbody>
+                </table>
+            </div>
         </div>
 
     </section>
@@ -1273,6 +1548,8 @@
 // GESTOR DE NAVEGACIÓN ENTRE MÓDULOS (SPA)
 // =========================================================================
 let moduloActivo = 'tab-vivo';
+let estadoMapaGlobal = null;
+let camaraSeleccionadaMapa = 'CAM-01';
 
 function cambiarModulo(moduloId, btn) {
     document.querySelectorAll('.module-pane').forEach(el => el.classList.remove('active'));
@@ -1284,14 +1561,430 @@ function cambiarModulo(moduloId, btn) {
     moduloActivo = moduloId;
 
     if (moduloId === 'tab-percha') {
-        setTimeout(cargarHeatmaps, 100);
+        setTimeout(cargarHeatmaps, 50);
+    } else if (moduloId === 'tab-inventario') {
+        cargarInventarioReal();
+    } else if (moduloId === 'tab-config') {
+        cargarConfiguracionMapa();
     }
 }
 
 // =========================================================================
-// SINCRONIZACIÓN EN TIEMPO REAL CON EL MOTOR YOLO DE PYTHON
-// - Actualiza métricas de tomas y devoluciones en Analítica de Percha
-// - Alimenta la tabla de auditoría en vivo sin sobrecargar el navegador
+// MOTOR GRÁFICO 2D: PLANO DEL LUGAR, PERCHAS, CONOS DE CÁMARA Y RE-ID
+// =========================================================================
+async function sincronizarMapa2D() {
+    try {
+        const res = await fetch("/api/map_state");
+        if (!res.ok) return;
+        const data = await res.json();
+        estadoMapaGlobal = data;
+        dibujarPlanoTienda2D(data);
+        actualizarPanelesReID(data);
+    } catch (e) {
+        // Silencioso en caso de desconexión momentánea
+    }
+}
+
+function dibujarPlanoTienda2D(data) {
+    const canvas = document.getElementById("store-map-canvas");
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    const W = canvas.width;
+    const H = canvas.height;
+
+    // 1. Fondo arquitectónico del plano (Azul Marino Oscuro con cuadrícula técnica)
+    ctx.fillStyle = "#08172b";
+    ctx.fillRect(0, 0, W, H);
+
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.05)";
+    ctx.lineWidth = 1;
+    for (let x = 0; x < W; x += 40) {
+        ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
+    }
+    for (let y = 0; y < H; y += 40) {
+        ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
+    }
+
+    // 1.B. Mapa de Calor Espacial 2D (Zonas Calientes en Naranja/Rojo vs Zonas Frías en Azul)
+    if (data.heatmap_grid && data.heatmap_grid.length > 0) {
+        const rows = data.heatmap_grid.length;
+        const cols = data.heatmap_grid[0].length;
+        const cw = W / cols;
+        const ch = H / rows;
+        let maxHeat = 1.0;
+        data.heatmap_grid.forEach(r => r.forEach(v => { if (v > maxHeat) maxHeat = v; }));
+
+        for (let r = 0; r < rows; r++) {
+            for (let c = 0; c < cols; c++) {
+                const val = data.heatmap_grid[r][c] || 0;
+                if (val <= 0.05) continue;
+                const ratio = Math.min(1.0, val / maxHeat);
+                ctx.save();
+                const gx = (c + 0.5) * cw;
+                const gy = (r + 0.5) * ch;
+                const grad = ctx.createRadialGradient(gx, gy, 4, gx, gy, Math.max(cw, ch) * 0.95);
+                if (ratio >= 0.45) {
+                    grad.addColorStop(0, `rgba(254, 80, 0, ${0.38 * ratio})`);
+                    grad.addColorStop(1, "rgba(254, 80, 0, 0)");
+                } else {
+                    grad.addColorStop(0, `rgba(56, 189, 248, ${0.24 * ratio})`);
+                    grad.addColorStop(1, "rgba(56, 189, 248, 0)");
+                }
+                ctx.fillStyle = grad;
+                ctx.fillRect(c * cw - 20, r * ch - 20, cw + 40, ch + 40);
+                ctx.restore();
+            }
+        }
+    }
+
+    // 1.C. Dibujar PUERTA DE ENTRADA y LÍNEA DE CAJAS (Validación Cliente Puerta -> Caja)
+    if (data.zonas_arquitectura) {
+        const pe = data.zonas_arquitectura.puerta_entrada;
+        const lc = data.zonas_arquitectura.linea_cajas;
+        if (pe) {
+            ctx.save();
+            ctx.fillStyle = "rgba(16, 185, 129, 0.16)";
+            ctx.strokeStyle = "#10b981";
+            ctx.lineWidth = 1.5;
+            ctx.beginPath();
+            ctx.roundRect(pe.x * W, pe.y * H, pe.w * W, pe.h * H, 6);
+            ctx.fill(); ctx.stroke();
+            ctx.fillStyle = "#6ee7b7";
+            ctx.font = "bold 9px 'JetBrains Mono', monospace";
+            ctx.fillText("🚪 PUERTA", pe.x * W + 4, pe.y * H + 14);
+            ctx.restore();
+        }
+        if (lc) {
+            ctx.save();
+            ctx.fillStyle = "rgba(59, 130, 246, 0.18)";
+            ctx.strokeStyle = "#60a5fa";
+            ctx.lineWidth = 1.5;
+            ctx.beginPath();
+            ctx.roundRect(lc.x * W, lc.y * H, lc.w * W, lc.h * H, 6);
+            ctx.fill(); ctx.stroke();
+            ctx.fillStyle = "#93c5fd";
+            ctx.font = "bold 9px 'JetBrains Mono', monospace";
+            ctx.fillText("🛒 CAJAS", lc.x * W + 6, lc.y * H + 14);
+            ctx.restore();
+        }
+    }
+
+    // 2. Zonas de Cobertura de las 3 Cámaras y Líneas de Handoff (Fronteras Re-ID)
+    const fronteras = [
+        { x: 0.39, label: "ZONA HANDOFF CAM-01 ↔ CAM-02" },
+        { x: 0.65, label: "ZONA HANDOFF CAM-02 ↔ CAM-03" }
+    ];
+    fronteras.forEach(f => {
+        const fx = f.x * W;
+        ctx.save();
+        ctx.strokeStyle = "rgba(56, 189, 248, 0.35)";
+        ctx.setLineDash([6, 6]);
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.moveTo(fx, 16);
+        ctx.lineTo(fx, H - 36);
+        ctx.stroke();
+        ctx.fillStyle = "rgba(56, 189, 248, 0.85)";
+        ctx.font = "bold 9px 'JetBrains Mono', monospace";
+        ctx.fillText(f.label, fx - 72, 26);
+        ctx.restore();
+    });
+
+    // 3. Dibujar Conos de Visión (FOV) e Iconos de Cámaras
+    (data.camaras || []).forEach(cam => {
+        const cx = cam.pos_x * W;
+        const cy = cam.pos_y * H;
+        const rad = (cam.angulo || 0) * Math.PI / 180;
+        const fovRad = ((cam.fov || 68) * Math.PI / 180) / 2;
+        const alcancePx = (cam.alcance || 0.42) * W * 0.65;
+        const esActiva = cam.id === data.camara_activa;
+
+        ctx.save();
+        ctx.beginPath();
+        ctx.moveTo(cx, cy);
+        ctx.arc(cx, cy, alcancePx, rad - fovRad, rad + fovRad);
+        ctx.closePath();
+        ctx.fillStyle = esActiva ? "rgba(254, 80, 0, 0.11)" : "rgba(255, 255, 255, 0.04)";
+        ctx.fill();
+        ctx.strokeStyle = esActiva ? "rgba(254, 80, 0, 0.45)" : "rgba(255, 255, 255, 0.14)";
+        ctx.lineWidth = 1;
+        ctx.stroke();
+
+        // Nodo de la cámara
+        ctx.beginPath();
+        ctx.arc(cx, cy, 8, 0, Math.PI * 2);
+        ctx.fillStyle = esActiva ? "#FE5000" : "#1e293b";
+        ctx.fill();
+        ctx.strokeStyle = "#FFFFFF";
+        ctx.lineWidth = 2;
+        ctx.stroke();
+
+        ctx.fillStyle = "#FFFFFF";
+        ctx.font = "bold 10px 'Space Grotesk', sans-serif";
+        ctx.fillText(cam.id, cx - 18, cy - 12);
+        ctx.restore();
+    });
+
+    // 4. Dibujar Perchas / Góndolas Mapeadas
+    (data.perchas || []).forEach(p => {
+        const px = p.map_x * W;
+        const py = p.map_y * H;
+        const pw = p.map_w * W;
+        const ph = p.map_h * H;
+
+        ctx.save();
+        ctx.fillStyle = "rgba(15, 23, 42, 0.90)";
+        ctx.strokeStyle = p.color || "#FE5000";
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.roundRect(px, py, pw, ph, 8);
+        ctx.fill();
+        ctx.stroke();
+
+        // Barra superior del color de la percha
+        ctx.fillStyle = p.color || "#FE5000";
+        ctx.fillRect(px + 2, py + 2, pw - 4, 5);
+
+        ctx.fillStyle = "#FFFFFF";
+        ctx.font = "bold 11px 'Space Grotesk', sans-serif";
+        ctx.fillText(p.nombre, px + 8, py + 20);
+
+        ctx.fillStyle = "#94A3B8";
+        ctx.font = "10px 'JetBrains Mono', monospace";
+        const promoBadge = (p.promociones && p.promociones.length > 0) ? `📢 ${p.promociones[0].titulo}` : `Tomas: ${p.tomas || 0} | Dev: ${p.devoluciones || 0}`;
+        ctx.fillText(promoBadge.slice(0, 32), px + 8, py + 36);
+        ctx.restore();
+    });
+
+    // 5. Dibujar Vectores Anónimos de Clientes (S#ID) y Staff Excluido
+    (data.personas || []).forEach(pers => {
+        const hx = pers.x * W;
+        const hy = pers.y * H;
+        const tr = pers.trayectoria || [];
+        const esCli = pers.es_cliente_valido !== false;
+
+        if (tr.length > 1) {
+            ctx.save();
+            ctx.beginPath();
+            tr.forEach((pt, idx) => {
+                const tx = pt.x * W;
+                const ty = pt.y * H;
+                if (idx === 0) ctx.moveTo(tx, ty);
+                else ctx.lineTo(tx, ty);
+            });
+            ctx.strokeStyle = !esCli ? "#64748b" : (pers.color || "#22c55e");
+            ctx.lineWidth = esCli ? 2.5 : 1.5;
+            if (!esCli) ctx.setLineDash([3, 3]);
+            ctx.globalAlpha = 0.65;
+            ctx.stroke();
+            ctx.restore();
+        }
+
+        ctx.save();
+        if (pers.percha_actual && esCli) {
+            ctx.beginPath();
+            ctx.arc(hx, hy, 16, 0, Math.PI * 2);
+            ctx.fillStyle = pers.estado_accion.includes("Último Momento") ? "rgba(59, 130, 246, 0.38)" : "rgba(254, 80, 0, 0.38)";
+            ctx.fill();
+        }
+
+        ctx.beginPath();
+        ctx.arc(hx, hy, 8, 0, Math.PI * 2);
+        ctx.fillStyle = !esCli ? "#64748b" : (pers.percha_actual ? "#FE5000" : (pers.color || "#22c55e"));
+        ctx.fill();
+        ctx.strokeStyle = "#FFFFFF";
+        ctx.lineWidth = 2;
+        ctx.stroke();
+
+        const itemsCnt = (pers.productos_en_mano || []).length;
+        const posturaCorta = (pers.postura_cabeza || "").includes("Giro") ? "👀Giro" : ((pers.postura_cabeza || "").includes("Agacha") ? "↓Agacha" : ((pers.postura_cabeza || "").includes("Sube") ? "↑Arriba" : ""));
+        const label = !esCli
+            ? `STAFF (Ignorado)`
+            : `${pers.etiqueta} ${posturaCorta}` + (itemsCnt > 0 ? ` 🛍️${itemsCnt}` : "");
+        ctx.font = "bold 10px 'JetBrains Mono', monospace";
+        const tw = ctx.measureText(label).width + 10;
+        ctx.fillStyle = !esCli ? "rgba(51, 65, 85, 0.90)" : "rgba(12, 35, 64, 0.92)";
+        ctx.beginPath();
+        ctx.roundRect(hx - tw / 2, hy - 26, tw, 16, 4);
+        ctx.fill();
+        ctx.strokeStyle = "rgba(255,255,255,0.25)";
+        ctx.lineWidth = 1;
+        ctx.stroke();
+
+        ctx.fillStyle = "#FFFFFF";
+        ctx.fillText(label, hx - tw / 2 + 5, hy - 14);
+        ctx.restore();
+    });
+}
+
+function actualizarPanelesReID(data) {
+    // 1. Estado del botón de Simulación Sobre el Papel
+    const badgeSim = document.getElementById("badge-sim-status");
+    const txtSim = document.getElementById("txt-toggle-sim");
+    if (badgeSim && txtSim) {
+        if (data.simulacion_activa) {
+            badgeSim.className = "bg-emerald-100 text-emerald-800 text-[10px] font-mono-num font-bold px-2.5 py-0.5 rounded-full";
+            badgeSim.innerText = "SIMULACIÓN SOBRE EL PAPEL ACTIVA";
+            txtSim.innerText = "Pausar Simulación";
+        } else {
+            badgeSim.className = "bg-slate-100 text-slate-700 text-[10px] font-mono-num font-bold px-2.5 py-0.5 rounded-full";
+            badgeSim.innerText = "MODO CÁMARA DIRECTA";
+            txtSim.innerText = "Activar Simulación 2D";
+        }
+    }
+
+    // 2. Contador y lista de Handoffs entre cámaras
+    const countEl = document.getElementById("map-handoff-counter");
+    if (countEl && data.metricas) {
+        countEl.innerText = `${data.metricas.handoffs || 0} Handoffs Re-ID Registrados`;
+    }
+
+    const handoffList = document.getElementById("handoff-feed-list");
+    if (handoffList && data.handoffs && data.handoffs.length > 0) {
+        handoffList.innerHTML = data.handoffs.slice(0, 6).map(h => `
+            <div class="flex items-center justify-between bg-white px-2.5 py-1.5 rounded-lg border border-kovaq-border">
+                <span><strong class="text-kovaq-orange">G#${h.global_id}</strong> pasó de <strong>${h.origen}</strong> → <strong>${h.destino}</strong></span>
+                <span class="bg-emerald-50 text-emerald-800 text-[10px] px-1.5 py-0.5 rounded font-bold">Re-ID ${(h.similitud * 100).toFixed(0)}% • ${h.hora}</span>
+            </div>
+        `).join("");
+    }
+
+    // 3. Lista de personas activas en el lugar
+    const activeBadge = document.getElementById("active-tracked-badge");
+    const activeList = document.getElementById("active-persons-list");
+    const personas = data.personas || [];
+    if (activeBadge) activeBadge.innerText = `${personas.length} clientes en pista`;
+    if (activeList) {
+        if (personas.length === 0) {
+            activeList.innerHTML = `<div class="text-kovaq-slate text-[11px]">Sin personas activas en este instante.</div>`;
+        } else {
+            activeList.innerHTML = personas.map(p => {
+                const bolsaTxt = (p.productos_en_mano && p.productos_en_mano.length > 0)
+                    ? `En mano: ${p.productos_en_mano.join(", ")}`
+                    : "Manos libres";
+                return `
+                <div class="flex items-center justify-between bg-white px-2.5 py-1.5 rounded-lg border border-kovaq-border">
+                    <div>
+                        <strong class="text-kovaq-navy font-mono-num">${p.etiqueta}</strong>
+                        <span class="text-[10px] bg-slate-100 text-kovaq-navy px-1.5 py-0.5 rounded font-bold ml-1">${p.camara_actual}</span>
+                        <span class="text-[11px] text-kovaq-slate ml-1">${p.estado_accion}</span>
+                    </div>
+                    <span class="text-[10px] font-mono-num text-kovaq-orange font-bold truncate max-w-[160px]" title="${bolsaTxt}">${bolsaTxt}</span>
+                </div>`;
+            }).join("");
+        }
+    }
+}
+
+async function toggleSimulacionPapel() {
+    try {
+        await fetch("/api/simulation/toggle", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({})
+        });
+        await sincronizarMapa2D();
+    } catch (e) {
+        console.error("Error cambiando simulación:", e);
+    }
+}
+
+async function seleccionarCamaraMapa(camId) {
+    camaraSeleccionadaMapa = camId;
+    const tit = document.getElementById("titulo-camara-activa");
+    const nombres = {
+        "CAM-01": "CAM-01 • Acceso & Pasillo Bebidas/Snacks",
+        "CAM-02": "CAM-02 • Pasillo Central Lácteos & Frescos",
+        "CAM-03": "CAM-03 • Fondo Hogar/Limpieza & Salida"
+    };
+    if (tit) tit.innerText = nombres[camId] || camId;
+    try {
+        await fetch("/api/cameras/select", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ camara_id: camId })
+        });
+        await sincronizarMapa2D();
+        await sincronizarTelemetriaBackend();
+    } catch (e) {
+        console.error(e);
+    }
+}
+
+// =========================================================================
+// DIBUJO DE OVERLAY HUD SOBRE EL VIDEO (PERCHAS ROIs + PERSONAS G#ID)
+// =========================================================================
+function dibujarOverlayVideoHUD(data) {
+    const canvas = document.getElementById("yolo-hud-canvas");
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    const W = canvas.width;
+    const H = canvas.height;
+    ctx.clearRect(0, 0, W, H);
+
+    // 1. Dibujar ROIs de las Perchas de la cámara activa
+    (data.perchas_roi || []).forEach(po => {
+        const [x1, y1, x2, y2] = po.box;
+        ctx.save();
+        ctx.strokeStyle = po.color || "#FE5000";
+        ctx.lineWidth = 2;
+        ctx.setLineDash([6, 4]);
+        ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
+
+        ctx.fillStyle = "rgba(12, 35, 64, 0.85)";
+        ctx.fillRect(x1, Math.max(0, y1 - 20), Math.min(W - x1, 185), 20);
+        ctx.fillStyle = "#FFFFFF";
+        ctx.font = "bold 10px 'JetBrains Mono', monospace";
+        ctx.fillText(`${po.id}: ${po.categoria}`, x1 + 6, Math.max(13, y1 - 6));
+        ctx.restore();
+    });
+
+    // 2. Dibujar Cajas de Personas de YOLO
+    (data.personas_box || []).forEach(pers => {
+        const [x1, y1, x2, y2] = pers.box;
+        const tieneProd = (pers.productos_en_mano || []).length > 0;
+        ctx.save();
+        ctx.strokeStyle = tieneProd ? "#FE5000" : "#22c55e";
+        ctx.lineWidth = 2.5;
+        ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
+
+        const lbl = `${pers.etiqueta} (${pers.dwell || 0}s)` + (tieneProd ? ` [${pers.productos_en_mano.length} prod]` : "");
+        ctx.fillStyle = tieneProd ? "#FE5000" : "#16a34a";
+        ctx.fillRect(x1, Math.max(0, y1 - 19), Math.min(W - x1, 145), 19);
+        ctx.fillStyle = "#FFFFFF";
+        ctx.font = "bold 10px 'JetBrains Mono', monospace";
+        ctx.fillText(lbl, x1 + 5, Math.max(13, y1 - 6));
+        ctx.restore();
+    });
+
+    // 3. Si estamos viendo la cámara activa y hay clientes en esa cámara en el plano 2D, mostrar indicador superior
+    if (estadoMapaGlobal && estadoMapaGlobal.personas) {
+        const enEstaCam = estadoMapaGlobal.personas.filter(p => p.camara_actual === (data.camara_activa || camaraSeleccionadaMapa));
+        enEstaCam.forEach((p, idx) => {
+            if (p.origen === "simulacion_papel") {
+                const bx = Math.min(W - 90, Math.max(20, intCoord(p.x, W)));
+                const by = Math.min(H - 120, Math.max(50, intCoord(p.y, H)));
+                ctx.save();
+                ctx.strokeStyle = p.percha_actual ? "#FE5000" : (p.color || "#22c55e");
+                ctx.lineWidth = 2;
+                ctx.strokeRect(bx - 28, by - 55, 56, 110);
+                ctx.fillStyle = "rgba(12, 35, 64, 0.88)";
+                ctx.fillRect(bx - 38, by - 74, 115, 18);
+                ctx.fillStyle = "#FFFFFF";
+                ctx.font = "bold 9px 'JetBrains Mono', monospace";
+                ctx.fillText(`${p.etiqueta} • ${p.camara_actual}`, bx - 34, by - 62);
+                ctx.restore();
+            }
+        });
+    }
+}
+
+function intCoord(normVal, maxDim) {
+    return Math.round((normVal || 0.5) * maxDim);
+}
+
+// =========================================================================
+// SINCRONIZACIÓN EN TIEMPO REAL CON EL MOTOR YOLO & RE-ID DE PYTHON
 // =========================================================================
 let totalEventosAuditados = 0;
 let ultimosEventosVistos = new Set();
@@ -1301,6 +1994,8 @@ async function sincronizarTelemetriaBackend() {
         const res = await fetch("/api/live_events");
         if (!res.ok) return;
         const data = await res.json();
+
+        dibujarOverlayVideoHUD(data);
 
         // 1. Sincronizar contadores de Tomas y Devoluciones en Módulo 2 (Analítica de Percha)
         const elPerchaTomados = document.getElementById('stat-percha-tomados');
@@ -1322,9 +2017,9 @@ async function sincronizarTelemetriaBackend() {
             }
         }
 
-        // 2. Inyectar eventos reales de Python en la tabla de auditoría
+        // 2. Inyectar eventos reales de Python (Tomas, Devoluciones y Handoffs Re-ID) en la tabla de auditoría
         if (data.eventos && data.eventos.length > 0) {
-            data.eventos.forEach(ev => {
+            data.eventos.slice().reverse().forEach(ev => {
                 const evKey = `${ev.id}_${ev.tipo}_${ev.hora}`;
                 if (!ultimosEventosVistos.has(evKey)) {
                     ultimosEventosVistos.add(evKey);
@@ -1335,20 +2030,29 @@ async function sincronizarTelemetriaBackend() {
                         if (placeholder) logBody.innerHTML = '';
 
                         const esTomado = ev.tipo === 'Producto Tomado';
-                        const badgeCls = esTomado 
-                            ? 'bg-orange-100 text-kovaq-orange font-bold border border-orange-300' 
-                            : 'bg-blue-100 text-blue-800 font-bold border border-blue-300';
-                        const icon = esTomado ? 'bi-hand-index-thumb-fill text-kovaq-orange' : 'bi-arrow-return-left text-blue-700';
+                        const esHandoff = ev.tipo === 'Handoff Cámara';
+                        let badgeCls = 'bg-blue-100 text-blue-800 font-bold border border-blue-300';
+                        let icon = 'bi-arrow-return-left text-blue-700';
+                        if (esTomado) {
+                            badgeCls = 'bg-orange-100 text-kovaq-orange font-bold border border-orange-300';
+                            icon = 'bi-hand-index-thumb-fill text-kovaq-orange';
+                        } else if (esHandoff) {
+                            badgeCls = 'bg-emerald-100 text-emerald-800 font-bold border border-emerald-300';
+                            icon = 'bi-arrow-left-right text-emerald-700';
+                        }
+
+                        const perchaInfo = `${ev.percha_id || 'PER-A1'} • ${ev.camara_id || 'CAM-01'}`;
+                        const globalTag = ev.global_id || `G#${ev.cliente_id}`;
 
                         const tr = document.createElement('tr');
-                        tr.className = 'hover:bg-slate-50 transition-colors animate-pulse';
+                        tr.className = 'hover:bg-slate-50 transition-colors';
                         tr.innerHTML = `
                             <td class="p-2.5 font-mono-num text-kovaq-slate">${ev.hora}</td>
                             <td class="p-2.5"><span class="${badgeCls} px-2 py-0.5 rounded text-[10px]"><i class="bi ${icon} mr-1"></i>${ev.tipo}</span></td>
-                            <td class="p-2.5 font-bold text-kovaq-navy">Cliente #${ev.cliente_id}</td>
+                            <td class="p-2.5 font-bold text-kovaq-navy">${globalTag}</td>
+                            <td class="p-2.5 font-mono-num text-xs text-kovaq-navy font-bold">${perchaInfo}</td>
                             <td class="p-2.5 font-medium text-kovaq-navy">${ev.producto}</td>
                             <td class="p-2.5 font-mono-num text-emerald-700 font-bold">${(ev.conf * 100).toFixed(1)}%</td>
-                            <td class="p-2.5 font-mono-num text-kovaq-slate">[${Array.isArray(ev.coords) ? ev.coords.join(', ') : ''}]</td>
                         `;
                         logBody.insertBefore(tr, logBody.firstChild);
 
@@ -1365,11 +2069,18 @@ async function sincronizarTelemetriaBackend() {
         if (liveInter && data.agarrados !== undefined) {
             liveInter.innerText = data.agarrados;
         }
+        const liveTrafico = document.getElementById('stat-live-trafico');
+        if (liveTrafico && data.entradas !== undefined && data.entradas > 0) {
+            liveTrafico.innerText = data.entradas;
+        }
     } catch (e) {
         // Silencioso en caso de desconexión momentánea
     }
 }
-setInterval(sincronizarTelemetriaBackend, 1200);
+setInterval(sincronizarTelemetriaBackend, 1500);
+setInterval(sincronizarMapa2D, 1500);
+sincronizarMapa2D();
+sincronizarTelemetriaBackend();
 
 // =========================================================================
 // MÓDULO 3: FILTRADO DE INVENTARIO LOCAL
@@ -1526,30 +2237,304 @@ async function subirArchivoLocal() {
 
 
 
-function agregarCamara(e) {
+// =========================================================================
+// MÓDULO 3: CARGA DE INVENTARIO REAL DESDE TURSO (VINCULADO A PERCHAS)
+// =========================================================================
+async function cargarInventarioReal() {
+    try {
+        const res = await fetch("/api/analytics/inventario");
+        if (!res.ok) return;
+        const data = await res.json();
+        const items = data.productos || [];
+        const tbody = document.getElementById("tabla-inventario-body");
+        if (!tbody || items.length === 0) return;
+
+        tbody.innerHTML = items.map(p => {
+            const iniciales = p.nombre.split(" ").slice(0, 2).map(w => w[0]).join("").toUpperCase();
+            let badgeEstado = "bg-emerald-100 text-emerald-800";
+            if (p.estado.includes("Crítico")) badgeEstado = "bg-red-100 text-red-800";
+            else if (p.estado === "Lento") badgeEstado = "bg-amber-100 text-amber-900";
+
+            return `
+            <tr class="hover:bg-slate-50 transition-colors item-inventario" data-nombre="${p.nombre.toLowerCase()} ${p.categoria.toLowerCase()} ${p.percha_id.toLowerCase()}" data-categoria="${p.categoria}">
+                <td class="p-3.5 font-bold text-kovaq-navy flex items-center gap-2">
+                    <span class="w-7 h-7 rounded-lg bg-orange-100 text-kovaq-orange flex items-center justify-center font-bold font-mono-num text-[11px]">${iniciales}</span>
+                    <div>
+                        <span class="block">${p.nombre}</span>
+                        <span class="text-[10px] font-mono-num text-kovaq-slate">${p.percha_id} • Nivel ${p.nivel}</span>
+                    </div>
+                </td>
+                <td class="p-3.5"><span class="bg-slate-100 text-kovaq-navy px-2 py-0.5 rounded text-[11px] font-bold">${p.categoria}</span></td>
+                <td class="p-3.5 font-mono-num">${p.stock} unidades</td>
+                <td class="p-3.5 font-mono-num font-bold text-kovaq-navy">${p.tomas} tomas <span class="text-[10px] text-blue-700">(${p.devueltos} dev.)</span></td>
+                <td class="p-3.5 font-mono-num font-bold text-emerald-700">${p.tasa_evacuacion}%</td>
+                <td class="p-3.5"><span class="${badgeEstado} text-[10px] px-2 py-0.5 rounded font-bold">${p.estado}</span></td>
+                <td class="p-3.5 text-right">
+                    <button type="button" class="btn-kovaq-outline text-[11px] py-1 px-3 min-h-[30px]" onclick="preguntarIARapido('Optimizar publicidad para ${p.nombre} en ${p.percha_id}')">Impulsar Ads</button>
+                </td>
+            </tr>`;
+        }).join("");
+
+        filtrarInventarioLocal();
+    } catch (e) {
+        console.error("Error cargando inventario real:", e);
+    }
+}
+
+// =========================================================================
+// MÓDULO 5: GESTIÓN REAL DE CÁMARAS Y PERCHAS EN EL MAPA 2D (TURSO DB)
+// =========================================================================
+async function cargarConfiguracionMapa() {
+    try {
+        const [resCams, resPerchas] = await Promise.all([
+            fetch("/api/cameras"),
+            fetch("/api/shelves")
+        ]);
+        if (resCams.ok) {
+            const dc = await resCams.json();
+            renderTablaCamaras(dc.camaras || []);
+        }
+        if (resPerchas.ok) {
+            const dp = await resPerchas.json();
+            renderTablaPerchas(dp.perchas || []);
+        }
+    } catch (e) {
+        console.error("Error cargando configuración del mapa:", e);
+    }
+}
+
+function renderTablaCamaras(camaras) {
+    const tbody = document.getElementById("tabla-camaras-body");
+    const countEl = document.getElementById("config-camaras-count");
+    if (countEl) countEl.innerText = `${camaras.length} Dispositivos`;
+    if (!tbody) return;
+
+    tbody.innerHTML = camaras.map(c => {
+        const badgeClass = c.estado === "Activa" ? "bg-emerald-100 text-emerald-800" : "bg-slate-100 text-slate-800";
+        return `
+        <tr>
+            <td class="p-2.5 font-bold text-kovaq-navy"><span class="font-mono-num text-kovaq-orange mr-1">${c.id}</span> ${c.nombre}</td>
+            <td class="p-2.5 font-mono text-kovaq-slate text-[11px]">${c.ruta || c.fuente}</td>
+            <td class="p-2.5 font-mono-num text-[11px] text-kovaq-navy">(${c.pos_x.toFixed(2)}, ${c.pos_y.toFixed(2)}) • ${c.angulo}°</td>
+            <td class="p-2.5"><span class="${badgeClass} text-[10px] px-2 py-0.5 rounded font-bold">${c.estado}</span></td>
+            <td class="p-2.5 text-right">
+                <button class="text-slate-400 hover:text-red-600 transition-colors" onclick="eliminarCamaraBackend('${c.id}')"><i class="bi bi-trash"></i></button>
+            </td>
+        </tr>`;
+    }).join("");
+}
+
+function renderTablaPerchas(perchas) {
+    const tbody = document.getElementById("tabla-perchas-config-body");
+    const countEl = document.getElementById("config-perchas-count");
+    if (countEl) countEl.innerText = `${perchas.length} Perchas Mapeadas`;
+    if (!tbody) return;
+
+    tbody.innerHTML = perchas.map(p => {
+        const nivelesHtml = (p.niveles || []).map(n => `<span class="inline-block bg-slate-100 border border-kovaq-border px-2 py-0.5 rounded text-[10px] mr-1 mb-1"><strong>${n.nivel}:</strong> ${n.producto}</span>`).join("");
+        const promosHtml = (p.promociones && p.promociones.length > 0)
+            ? p.promociones.map(pr => `<span class="inline-block bg-orange-50 text-kovaq-orange border border-orange-200 px-2 py-0.5 rounded text-[10px] font-bold">📢 ${pr.titulo} (-${pr.descuento_pct}%)</span>`).join(" ")
+            : `<span class="text-slate-400 text-[11px]">Sin pauta POP</span>`;
+        const tempBadge = p.temperatura === "caliente"
+            ? `<span class="bg-orange-100 text-kovaq-orange px-2 py-0.5 rounded text-[10px] font-bold">🔥 Zona Caliente</span>`
+            : `<span class="bg-blue-50 text-blue-800 px-2 py-0.5 rounded text-[10px] font-bold">❄️ Zona Fría/Media</span>`;
+
+        return `
+        <tr>
+            <td class="p-2.5 font-mono-num font-bold text-kovaq-orange">${p.id}</td>
+            <td class="p-2.5 font-bold text-kovaq-navy">${p.nombre}<span class="block text-[10px] font-mono-num text-kovaq-slate">${p.camara_id} • ${p.categoria}</span></td>
+            <td class="p-2.5">${nivelesHtml}</td>
+            <td class="p-2.5">${promosHtml}</td>
+            <td class="p-2.5">${tempBadge}</td>
+            <td class="p-2.5 font-mono-num font-bold text-emerald-700">${p.tomas || 0} tomas / <span class="text-blue-700">${p.devoluciones || 0} dev.</span></td>
+        </tr>`;
+    }).join("");
+}
+
+async function guardarPlanogramaPercha(e) {
+    e.preventDefault();
+    const pid = document.getElementById("plano-id").value.trim().toUpperCase();
+    const nombre = document.getElementById("plano-nombre").value.trim();
+    const cat = document.getElementById("plano-cat").value.trim();
+    const cam = document.getElementById("plano-cam").value;
+    const pSup = document.getElementById("plano-prod-sup").value.trim();
+    const pMed = document.getElementById("plano-prod-med").value.trim();
+    const pInf = document.getElementById("plano-prod-inf").value.trim();
+
+    const niveles = [
+        { nivel: "Superior (Subir Cabeza)", y1: 0.18, y2: 0.42, producto: pSup },
+        { nivel: "Medio (Altura Ojos)", y1: 0.42, y2: 0.68, producto: pMed },
+        { nivel: "Inferior (Agacharse)", y1: 0.68, y2: 0.90, producto: pInf }
+    ];
+    try {
+        const res = await fetch("/api/shelves", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                id: pid, nombre: nombre, categoria: cat, camara_id: cam,
+                map_x: 0.44, map_y: 0.40, map_w: 0.22, map_h: 0.14,
+                roi: { x1: 0.15, y1: 0.18, x2: 0.85, y2: 0.90 },
+                niveles: niveles, color: "#FE5000"
+            })
+        });
+        if (res.ok) {
+            const d = await res.json();
+            renderTablaPerchas(d.perchas || []);
+            cargarInventarioReal();
+            cargarResumenEjecutivoPublicidad();
+            sincronizarMapa2D();
+            e.target.reset();
+        }
+    } catch (err) {
+        console.error("Error guardando planograma:", err);
+    }
+}
+
+async function guardarPromocionPercha(e) {
+    e.preventDefault();
+    const perchaId = document.getElementById("promo-percha").value;
+    const producto = document.getElementById("promo-producto").value.trim();
+    const titulo = document.getElementById("promo-titulo").value.trim();
+    const tipo = document.getElementById("promo-tipo").value.trim();
+    const desc = parseInt(document.getElementById("promo-desc").value || "0", 10);
+
+    try {
+        const res = await fetch("/api/promotions", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                percha_id: perchaId,
+                producto: producto,
+                titulo: titulo,
+                tipo_publicidad: tipo,
+                descuento_pct: desc
+            })
+        });
+        if (res.ok) {
+            await cargarConfiguracionMapa();
+            await cargarInventarioReal();
+            await cargarResumenEjecutivoPublicidad();
+            await sincronizarMapa2D();
+            e.target.reset();
+        }
+    } catch (err) {
+        console.error("Error guardando promoción:", err);
+    }
+}
+
+async function cargarResumenEjecutivoPublicidad() {
+    try {
+        const res = await fetch("/api/analytics/resumen_publicidad");
+        if (!res.ok) return;
+        const ex = await res.json();
+
+        const comp = ex.comportamiento_visual || {};
+        const post = ex.postura_cabeza || {};
+        const elMC = document.getElementById("kpi-mira-compra");
+        const elMCD = document.getElementById("kpi-mira-compra-dwell");
+        const elNMC = document.getElementById("kpi-no-mira-compra");
+        const elSM = document.getElementById("kpi-solo-mira");
+        const elUM = document.getElementById("kpi-ultimo-momento");
+
+        if (elMC && comp.mira_y_compra) elMC.innerText = comp.mira_y_compra.casos;
+        if (elMCD && comp.mira_y_compra) elMCD.innerText = `Mirada media: ${comp.mira_y_compra.dwell}s`;
+        if (elNMC && comp.no_mira_y_compra) elNMC.innerText = comp.no_mira_y_compra.casos;
+        if (elSM && comp.solo_mira) elSM.innerText = comp.solo_mira.casos;
+        if (elUM && comp.ultimo_momento_devuelve) elUM.innerText = comp.ultimo_momento_devuelve.casos;
+
+        const pGiro = document.getElementById("postura-giro");
+        const pArr = document.getElementById("postura-arriba");
+        const pAga = document.getElementById("postura-agacha");
+        if (pGiro && post.giro_percha !== undefined) pGiro.innerText = post.giro_percha;
+        if (pArr && post.sube_cabeza !== undefined) pArr.innerText = post.sube_cabeza;
+        if (pAga && post.se_agacha !== undefined) pAga.innerText = post.se_agacha;
+
+        const zCal = document.getElementById("lista-zonas-calientes");
+        const zFri = document.getElementById("lista-zonas-frias");
+        const pClave = document.getElementById("lista-productos-clave");
+
+        if (zCal && ex.zonas_calientes) {
+            zCal.innerHTML = ex.zonas_calientes.map(z => `<span class="inline-block mr-2">${z.nombre} (${z.tomas} tomas • <span class="text-kovaq-orange">${z.promocion}</span>)</span>`).join("<br>");
+        }
+        if (zFri && ex.zonas_frias) {
+            zFri.innerHTML = ex.zonas_frias.map(z => `<span class="inline-block mr-2">${z.nombre} (${z.tomas} tomas • ${z.promocion})</span>`).join("<br>");
+        }
+        if (pClave && ex.productos_mas_llevados && ex.productos_cambio_ultimo_momento) {
+            const topLlevado = ex.productos_mas_llevados[0];
+            const topDuda = ex.productos_cambio_ultimo_momento[0];
+            pClave.innerHTML = `
+                <div>✅ <strong>Más Llevado:</strong> ${topLlevado ? `${topLlevado.nombre} (${topLlevado.llevados_netos} netos en ${topLlevado.percha_id})` : '-'}</div>
+                <div class="mt-1">⚠️ <strong>Mayor Cambio Último Momento:</strong> ${topDuda ? `<span class="text-kovaq-orange font-bold">${topDuda.nombre}</span> (${topDuda.devueltos} devueltos en ${topDuda.percha_id})` : '-'}</div>
+            `;
+        }
+
+        // Actualizar Matriz de Decisión Publicitaria en Módulo 4 (Marketing) con las Promociones POP Reales
+        if (ex.evaluacion_promociones && ex.evaluacion_promociones.length > 0) {
+            const tablaCat = document.getElementById("tabla-catalogo-body");
+            if (tablaCat) {
+                tablaCat.innerHTML = ex.evaluacion_promociones.map(pr => {
+                    const badgeCls = pr.estado_efecto.includes("Alta")
+                        ? "bg-emerald-100 text-emerald-800 font-bold"
+                        : "bg-orange-100 text-kovaq-orange font-bold";
+                    return `
+                    <tr class="hover:bg-slate-50 transition-colors">
+                        <td class="p-2.5 font-bold text-kovaq-navy">
+                            ${pr.producto}
+                            <span class="block text-[10px] font-mono-num text-kovaq-orange">📢 ${pr.titulo} (${pr.percha_id})</span>
+                        </td>
+                        <td class="p-2.5 font-mono-num text-kovaq-slate">${pr.tipo_publicidad}</td>
+                        <td class="p-2.5 font-mono-num font-bold text-kovaq-navy">${pr.tomas} tomas / <span class="text-blue-700">${pr.devueltos} dev.</span></td>
+                        <td class="p-2.5"><span class="${badgeCls} px-2 py-0.5 rounded text-[11px] font-mono-num">${pr.efectividad_pct}%</span></td>
+                        <td class="p-2.5 text-xs text-kovaq-slate">${pr.diagnostico}</td>
+                    </tr>`;
+                }).join("");
+            }
+        }
+
+        if (ex.motor_marketing_ai && ex.motor_marketing_ai.resumen_ejecutivo) {
+            const elRes = document.getElementById("texto-resumen-ia");
+            if (elRes) elRes.innerText = ex.motor_marketing_ai.resumen_ejecutivo;
+        }
+    } catch (err) {
+        console.error("Error cargando resumen ejecutivo publicidad:", err);
+    }
+}
+setInterval(cargarResumenEjecutivoPublicidad, 5000);
+cargarResumenEjecutivoPublicidad();
+
+async function agregarCamara(e) {
     e.preventDefault();
     const nombre = document.getElementById("cam-nombre").value;
     const url = document.getElementById("cam-url").value;
     const estado = document.getElementById("cam-estado").value;
-    const tbody = document.getElementById("tabla-camaras-body");
-    const badgeClass = estado === "Activa" ? "bg-emerald-100 text-emerald-800" : "bg-slate-100 text-slate-800";
-
-    const nuevaFila = document.createElement("tr");
-    nuevaFila.innerHTML = `
-        <td class="p-2.5 font-bold text-kovaq-navy">${nombre}</td>
-        <td class="p-2.5 font-mono text-kovaq-slate">${url}</td>
-        <td class="p-2.5"><span class="${badgeClass} text-[10px] px-2 py-0.5 rounded font-bold">${estado}</span></td>
-        <td class="p-2.5 text-right">
-            <button class="text-slate-400 hover:text-red-600 transition-colors" onclick="eliminarFila(this)"><i class="bi bi-trash"></i></button>
-        </td>
-    `;
-    tbody.appendChild(nuevaFila);
-    e.target.reset();
+    try {
+        const res = await fetch("/api/cameras", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ nombre: nombre, ruta: url, estado: estado, pos_x: 0.5, pos_y: 0.82, angulo: 270 })
+        });
+        if (res.ok) {
+            const d = await res.json();
+            renderTablaCamaras(d.camaras || []);
+            e.target.reset();
+            sincronizarMapa2D();
+        }
+    } catch (err) {
+        console.error("Error guardando cámara:", err);
+    }
 }
 
-function eliminarFila(btn) {
-    if (confirm("¿Desea desconectar y eliminar esta cámara del sistema?")) {
-        btn.closest("tr").remove();
+async function eliminarCamaraBackend(camId) {
+    if (!confirm(`¿Desea desconectar y eliminar la cámara ${camId} del plano?`)) return;
+    try {
+        const res = await fetch(`/api/cameras/${encodeURIComponent(camId)}`, { method: "DELETE" });
+        if (res.ok) {
+            const d = await res.json();
+            renderTablaCamaras(d.camaras || []);
+            sincronizarMapa2D();
+        }
+    } catch (err) {
+        console.error("Error eliminando cámara:", err);
     }
 }
 
@@ -1607,46 +2592,11 @@ async function actualizarDatosDashboard() {
             }
         }
 
-        // 3. Catálogo de Recomendaciones en Módulo 4 (Marketing)
-        if (s.top_productos && s.top_productos.length > 0) {
-            const tablaCat = document.getElementById("tabla-catalogo-body");
-            if (tablaCat) {
-                tablaCat.innerHTML = "";
-                s.top_productos.forEach(p => {
-                    let traficoProd = trafico > p.veces ? trafico : p.veces + 10;
-                    let convProd = ((p.veces / traficoProd) * 100).toFixed(1);
-                    
-                    let badgeCls = "bg-emerald-100 text-emerald-800 font-bold";
-                    let recomendacion = "Rendimiento positivo. Redirigir pauta hacia SKUs secundarios.";
-
-                    if (convProd < 10) {
-                        badgeCls = "bg-orange-100 text-kovaq-orange font-bold";
-                        recomendacion = `Baja evacuación. Lanzar Reels geolocalizados para ${p.producto}.`;
-                    } else if (convProd < 20) {
-                        badgeCls = "bg-amber-100 text-amber-900 font-bold";
-                        recomendacion = `Duda de compra. Ofrecer cupón digital para ${p.producto}.`;
-                    }
-
-                    tablaCat.innerHTML += `
-                    <tr class="hover:bg-slate-50 transition-colors">
-                        <td class="p-2.5 font-bold text-kovaq-navy">${p.producto}</td>
-                        <td class="p-2.5 font-mono-num text-kovaq-slate">${traficoProd}</td>
-                        <td class="p-2.5 font-mono-num font-bold text-kovaq-navy">${p.veces}</td>
-                        <td class="p-2.5"><span class="${badgeCls} px-2 py-0.5 rounded text-[11px] font-mono-num">${convProd}%</span></td>
-                        <td class="p-2.5 text-xs text-kovaq-slate">${recomendacion}</td>
-                    </tr>`;
-                });
-            }
-        }
-
-        // 4. Diagnóstico IA
+        // 3. Diagnóstico IA complementario (la tabla de promociones POP la gestiona cargarResumenEjecutivoPublicidad)
         if (s.resumen) {
-            const elRes = document.getElementById("texto-resumen-ia");
             const elFric = document.getElementById("texto-friccion");
             const elRet = document.getElementById("texto-retargeting");
-
-            if (elRes) elRes.innerText = s.resumen;
-            if (elFric) elFric.innerText = `Evaluados ${trafico} tránsitos en góndola. Tasa de conversión general calculada en ${tasa}%.`;
+            if (elFric) elFric.innerText = `Evaluados ${trafico} vectores de clientes (Puerta → Caja). Tasa de conversión general: ${tasa}%.`;
             if (elRet) {
                 if (parseFloat(tasa) < 12 && trafico > 10) {
                     elRet.innerHTML = `<strong class="text-kovaq-orange">Oportunidad Pauta:</strong> Alto tráfico pero baja toma de producto. Ideal para campaña publicitaria de choque inmediata.`;
@@ -1785,10 +2735,30 @@ async function cargarHeatmaps() {
         if (resFranjas.ok) {
             const df = await resFranjas.json();
             renderDonutFranjas(df);
+            actualizarTarjetasFranjas(df);
         }
     } catch (e) {
         console.error("Error cargando heatmaps:", e);
     }
+}
+
+function actualizarTarjetasFranjas(df) {
+    const pct = df.porcentajes || {};
+    ['manana', 'tarde', 'noche'].forEach(k => {
+        const info = df[k] || {};
+        const elTraf = document.getElementById(`franja-${k}-trafico`);
+        const elRet = document.getElementById(`franja-${k}-retencion`);
+        const elConv = document.getElementById(`franja-${k}-conv`);
+        if (elTraf) elTraf.innerText = `${info.trafico || 0} clientes`;
+        if (elRet) elRet.innerText = `${info.permanencia || 0.0} s`;
+        if (elConv) elConv.innerText = `${info.conversion || 0.0}%`;
+    });
+    const pMan = document.getElementById("franja-manana-pct");
+    const pTar = document.getElementById("franja-tarde-pct");
+    const pNoc = document.getElementById("franja-noche-pct");
+    if (pMan && pct["Mañana"] !== undefined) pMan.innerText = `${pct["Mañana"]}% Tráfico`;
+    if (pTar && pct["Tarde"] !== undefined) pTar.innerText = `${pct["Tarde"]}% Tráfico`;
+    if (pNoc && pct["Noche"] !== undefined) pNoc.innerText = `${pct["Noche"]}% Tráfico`;
 }
 
 // Actualiza los Insights Rápidos superiores de la Matriz
@@ -1944,8 +2914,14 @@ function renderMatrizCalor24H(dias, horas, matriz) {
     cont.innerHTML = html;
 }
 
-// Bucle de Actualización Dinámica del Heatmap (cada 3.5 segundos en segundo plano)
-setInterval(cargarHeatmaps, 3500);
+// Bucle de Actualización Dinámica del Heatmap (solo cuando el módulo de Analítica de Percha está visible)
+setInterval(() => {
+    if (moduloActivo === 'tab-percha') {
+        cargarHeatmaps();
+    }
+}, 6000);
+cargarInventarioReal();
+cargarConfiguracionMapa();
 
 function renderGraficoHeatmapHora(labels, data) {
     const ctx = document.getElementById("chart-heatmap-hora");

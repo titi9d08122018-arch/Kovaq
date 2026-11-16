@@ -1,6 +1,6 @@
 """
-analytics.py — Router de Analítica Avanzada para Kovaq Retail Analytics.
-Módulos: Heatmaps, Categorías, Horarios/Perfiles, Publicidad Dinámica.
+analytics.py — Router de Analítica Avanzada y Mapeo Topológico para Kovaq Retail Analytics.
+Módulos: Heatmaps, Categorías, Horarios/Perfiles, Publicidad Dinámica, Mapa 2D, Perchas e Inventario.
 Se monta en /api/analytics y no altera ningún endpoint existente.
 """
 import asyncio
@@ -13,8 +13,11 @@ from database import (
     buscar_productos, obtener_categorias_con_productos,
     obtener_stats_por_franja, obtener_productos_por_franja,
     obtener_perfil_permanencia, obtener_tendencia_diaria,
-    obtener_datos_publicidad
+    obtener_datos_publicidad, obtener_inventario_real,
+    obtener_camaras_mapa, obtener_perchas_mapa,
+    obtener_resumen_ejecutivo_publicidad, obtener_promociones_percha
 )
+from ai_agent import KovaqMarketingAnalyticsEngine
 
 router = APIRouter(prefix="/api/analytics", tags=["analytics"])
 
@@ -35,7 +38,8 @@ async def heatmap_hora(request: Request, dias: int = Query(7, ge=1, le=90)):
     data = await asyncio.to_thread(obtener_heatmap_hora, dias)
     horas = {str(i).zfill(2): 0 for i in range(24)}
     for row in data:
-        horas[row[0]] = row[1]
+        if row[0] is not None:
+            horas[str(row[0]).zfill(2)] = row[1]
     return {"labels": list(horas.keys()), "data": list(horas.values())}
 
 
@@ -46,22 +50,24 @@ async def heatmap_matriz(request: Request, dias: int = Query(30, ge=1, le=90)):
     data = await asyncio.to_thread(obtener_heatmap_dia_hora, dias)
     matriz = [[0] * 24 for _ in range(7)]
     nombres_dias = ["Dom", "Lun", "Mar", "Mié", "Jue", "Vie", "Sáb"]
-    
+
     total_semanal = 0
     max_hora_val = -1
     max_hora_dia = ""
     max_hora_txt = ""
 
     for row in data:
+        if row[0] is None or row[1] is None:
+            continue
         dia, hora, total = int(row[0]), int(row[1]), int(row[2])
-        matriz[dia][hora] = total
-        total_semanal += total
-        if total > max_hora_val:
-            max_hora_val = total
-            max_hora_dia = nombres_dias[dia]
-            max_hora_txt = f"{hora:02d}:00"
+        if 0 <= dia < 7 and 0 <= hora < 24:
+            matriz[dia][hora] = total
+            total_semanal += total
+            if total > max_hora_val:
+                max_hora_val = total
+                max_hora_dia = nombres_dias[dia]
+                max_hora_txt = f"{hora:02d}:00"
 
-    # Resumen por Franjas Comerciales (Mañana, Mediodía, Tarde, Noche)
     resumen_franjas = []
     totales_dia = []
     for d in range(7):
@@ -83,7 +89,6 @@ async def heatmap_matriz(request: Request, dias: int = Query(30, ge=1, le=90)):
             "total": tot_dia
         })
 
-    # Encontrar Día Pico
     max_dia_idx = max(range(7), key=lambda i: totales_dia[i]) if totales_dia else 0
     dia_pico = {
         "dia": nombres_dias[max_dia_idx],
@@ -91,7 +96,7 @@ async def heatmap_matriz(request: Request, dias: int = Query(30, ge=1, le=90)):
     }
 
     hora_pico = {
-        "hora": max_hora_txt or "20:00",
+        "hora": max_hora_txt or "16:00",
         "dia": max_hora_dia or "Miércoles",
         "total": max_hora_val if max_hora_val >= 0 else 0
     }
@@ -119,8 +124,16 @@ async def heatmap_interacciones(request: Request, dias: int = Query(7, ge=1, le=
 
 
 # ==========================================
-# 2. CATEGORÍAS, BÚSQUEDA Y TOP
+# 2. CATEGORÍAS, INVENTARIO, BÚSQUEDA Y TOP
 # ==========================================
+@router.get("/inventario")
+async def inventario(request: Request):
+    """Catálogo de productos con ubicación de percha, stock e interacciones reales."""
+    await _auth(request)
+    items = await asyncio.to_thread(obtener_inventario_real)
+    return {"productos": items}
+
+
 @router.get("/productos/top")
 async def top_productos(
     request: Request,
@@ -154,23 +167,38 @@ async def categorias(request: Request):
 # ==========================================
 @router.get("/horarios/franjas")
 async def stats_franjas(request: Request, dias: int = Query(7, ge=1, le=90)):
-    """KPIs por franja: mañana (6-12), tarde (12-18), noche (18-6)."""
+    """KPIs por franja: mañana (6-12), tarde (12-18), noche (18-6) + porcentajes para gráfico Donut."""
     await _auth(request)
     data = await asyncio.to_thread(obtener_stats_por_franja, dias)
     franjas = {
-        "manana": {"trafico": 0, "interacciones": 0, "permanencia": 0.0},
-        "tarde":  {"trafico": 0, "interacciones": 0, "permanencia": 0.0},
-        "noche":  {"trafico": 0, "interacciones": 0, "permanencia": 0.0},
+        "manana": {"trafico": 0, "interacciones": 0, "permanencia": 0.0, "conversion": 0.0},
+        "tarde":  {"trafico": 0, "interacciones": 0, "permanencia": 0.0, "conversion": 0.0},
+        "noche":  {"trafico": 0, "interacciones": 0, "permanencia": 0.0, "conversion": 0.0},
     }
     for franja, tipo, total, prom in data:
         if franja not in franjas:
             continue
         if tipo == "trafico":
-            franjas[franja]["trafico"] = total
+            franjas[franja]["trafico"] = int(total)
         elif tipo == "interaccion":
-            franjas[franja]["interacciones"] = total
+            franjas[franja]["interacciones"] = int(total)
         elif tipo == "permanencia":
             franjas[franja]["permanencia"] = round(float(prom), 1)
+
+    total_trafico = sum(v["trafico"] for v in franjas.values())
+    for k, v in franjas.items():
+        v["conversion"] = round((v["interacciones"] / v["trafico"]) * 100.0, 1) if v["trafico"] > 0 else 0.0
+
+    if total_trafico > 0:
+        porcentajes = {
+            "Mañana": round((franjas["manana"]["trafico"] / total_trafico) * 100, 1),
+            "Tarde": round((franjas["tarde"]["trafico"] / total_trafico) * 100, 1),
+            "Noche": round((franjas["noche"]["trafico"] / total_trafico) * 100, 1),
+        }
+    else:
+        porcentajes = {"Mañana": 30, "Tarde": 45, "Noche": 25}
+
+    franjas["porcentajes"] = porcentajes
     return franjas
 
 
@@ -212,7 +240,7 @@ async def tendencia(request: Request, dias: int = Query(14, ge=1, le=90)):
 @router.get("/publicidad")
 async def publicidad(
     request: Request,
-    franja: str = Query(None, regex="^(manana|tarde|noche)$"),
+    franja: str = Query(None, pattern="^(manana|tarde|noche)$"),
     dias: int = Query(7, ge=1, le=90),
 ):
     """Datos cruzados + sugerencias automáticas de pauta por franja horaria."""
@@ -278,3 +306,21 @@ async def publicidad(
 
     data["sugerencias"] = sugerencias
     return data
+
+
+@router.get("/resumen_publicidad")
+async def resumen_publicidad_ejecutivo(request: Request):
+    """
+    Entrega el Dashboard Ejecutivo de Publicidad en Punto de Venta cruzando:
+    - Coordenadas anónimas 2D (clientes Puerta->Caja vs empleados excluidos)
+    - Zonas Calientes y Zonas Frías
+    - Atención visual (Mira y compra, No mira y compra, Solo mira, Devuelve a último momento)
+    - Postura de cabeza (Giro a percha, Sube cabeza, Se agacha)
+    - Efectividad de promociones activas y diagnóstico del Motor Analítico Kovaq Marketing AI.
+    """
+    await _auth(request)
+    exec_data = await asyncio.to_thread(obtener_resumen_ejecutivo_publicidad)
+    diag = await asyncio.to_thread(KovaqMarketingAnalyticsEngine.generar_diagnostico_integral, exec_data)
+    exec_data["motor_marketing_ai"] = diag
+    return exec_data
+
