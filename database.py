@@ -70,6 +70,19 @@ def _asegurar_columna(conn, tabla: str, columna: str, definicion: str):
         log.debug("Aviso migración %s.%s: %s", tabla, columna, err)
 
 
+def _insertar_en_lotes(conn, sql_insert_prefix: str, filas: list, chunk_size: int = 60):
+    """Ejecuta INSERT multi-fila en lotes para evitar miles de round-trips HTTP en Turso."""
+    if not filas:
+        return
+    num_cols = len(filas[0])
+    placeholder_fila = "(" + ",".join(["?"] * num_cols) + ")"
+    for i in range(0, len(filas), chunk_size):
+        lote = filas[i:i + chunk_size]
+        placeholders = ",".join([placeholder_fila] * len(lote))
+        flat_params = [val for fila in lote for val in fila]
+        conn.execute(f"{sql_insert_prefix} VALUES {placeholders}", flat_params)
+
+
 def leer(query: str, params: tuple = (), uno: bool = False):
     conn = _abrir()
     try:
@@ -412,18 +425,18 @@ def init_analytics_sync():
         conn.execute("CREATE INDEX IF NOT EXISTS idx_tc_percha_comp ON telemetria_coordenadas(percha_id, comportamiento, creado)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_tc_suc_valido_creado ON telemetria_coordenadas(sucursal_id, es_cliente_valido, creado)")
 
-        # Semilla de sucursales corporativas
+        # Semilla de sucursales corporativas (INSERT multi-fila en 1 solo round-trip)
         sucursales_default = [
             ("SUC-NORTE", "Matriz Norte • Av. Amazonas", "Quito", "Av. Amazonas N34-120", "Hipermercado", 1450, json.dumps(_plano_arquitectonico_norte()), "Activa"),
             ("SUC-CENTRO", "Plaza Centro • Mall del Sol", "Guayaquil", "Av. Juan Tanca Marengo", "Supermercado Express", 980, json.dumps(_plano_arquitectonico_centro()), "Activa"),
             ("SUC-SUR", "Hiper Sur • Av. Maldonado", "Cuenca", "Av. Remigio Crespo 4-80", "Hiper Familiar", 1820, json.dumps(_plano_arquitectonico_sur()), "Activa"),
         ]
-        for suc in sucursales_default:
-            conn.execute("""
-                INSERT OR IGNORE INTO sucursales
-                (id, nombre, ciudad, direccion, formato, area_m2, plano_json, estado)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """, suc)
+        _insertar_en_lotes(
+            conn,
+            "INSERT OR IGNORE INTO sucursales (id, nombre, ciudad, direccion, formato, area_m2, plano_json, estado)",
+            sucursales_default,
+            chunk_size=20,
+        )
 
         cats = {
             "Cereales": ["Cereales Kellogg's 500g", "Avena Crujiente 400g", "Barras de Cereal Mix"],
@@ -433,15 +446,10 @@ def init_analytics_sync():
             "Snacks": ["cake", "donut", "sandwich", "Papas Artesanales 150g"],
             "Limpieza": ["Detergente Líquido 2L"]
         }
-        for cat, prods in cats.items():
-            conn.execute("INSERT OR IGNORE INTO categorias (nombre) VALUES (?)", (cat,))
-            row = conn.execute("SELECT id FROM categorias WHERE nombre = ?", (cat,)).fetchone()
-            if row:
-                for p in prods:
-                    conn.execute(
-                        "INSERT OR IGNORE INTO producto_categoria (producto, categoria_id) VALUES (?, ?)",
-                        (p, row[0])
-                    )
+        _insertar_en_lotes(conn, "INSERT OR IGNORE INTO categorias (nombre)", [(c,) for c in cats.keys()], chunk_size=20)
+        cat_ids = dict(conn.execute("SELECT nombre, id FROM categorias").fetchall())
+        prod_cat_rows = [(p, cat_ids[c]) for c, prods in cats.items() if c in cat_ids for p in prods]
+        _insertar_en_lotes(conn, "INSERT OR IGNORE INTO producto_categoria (producto, categoria_id)", prod_cat_rows, chunk_size=50)
 
         # Semilla de Cámaras (con cobertura por sucursal)
         camaras_default = [
@@ -470,12 +478,12 @@ def init_analytics_sync():
              0.84, 0.50, 180.0, 72.0, 0.38,
              json.dumps({"x_min": 0.64, "x_max": 0.92, "y_min": 0.20, "y_max": 0.88, "altura_m": 3.8, "pitch_deg": 36}), "SUC-SUR"),
         ]
-        for c in camaras_default:
-            conn.execute("""
-                INSERT OR IGNORE INTO camaras_mapa
-                (id, nombre, fuente, ruta, estado, pos_x, pos_y, angulo, fov, alcance, homografia_json, sucursal_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, c)
+        _insertar_en_lotes(
+            conn,
+            "INSERT OR IGNORE INTO camaras_mapa (id, nombre, fuente, ruta, estado, pos_x, pos_y, angulo, fov, alcance, homografia_json, sucursal_id)",
+            camaras_default,
+            chunk_size=20,
+        )
 
         # Semilla de Perchas mapeadas con polígonos de perspectiva reales
         perchas_default = [
@@ -517,7 +525,6 @@ def init_analytics_sync():
                  {"nivel": "Superior (Subir Cabeza)", "y1": 0.28, "y2": 0.54, "producto": "Papas Artesanales 150g"},
                  {"nivel": "Inferior (Agacharse)", "y1": 0.54, "y2": 0.94, "producto": "Detergente Líquido 2L"}
              ]), "#8B5CF6", "SUC-NORTE"),
-            # Sucursal Centro
             ("PER-CEN1", "Percha Centro 1 • Desayuno Express", "Cereales", "CAM-C1",
              0.13, 0.24, 0.22, 0.14,
              json.dumps({"x1": 0.0, "y1": 0.285, "x2": 0.432, "y2": 1.0, "poly": POLY_PER_A1}),
@@ -546,7 +553,6 @@ def init_analytics_sync():
                  {"nivel": "Medio (Altura Ojos)", "y1": 0.44, "y2": 0.74, "producto": "Yogurt Griego Natural"},
                  {"nivel": "Superior (Subir Cabeza)", "y1": 0.29, "y2": 0.44, "producto": "Leche Entera Tetra 1L"},
              ]), "#10B981", "SUC-CENTRO"),
-            # Sucursal Sur
             ("PER-SUR1", "Percha Sur 1 • Cereales Familiares", "Cereales", "CAM-S1",
              0.12, 0.24, 0.23, 0.14,
              json.dumps({"x1": 0.0, "y1": 0.285, "x2": 0.432, "y2": 1.0, "poly": POLY_PER_A1}),
@@ -576,14 +582,13 @@ def init_analytics_sync():
                  {"nivel": "Superior (Subir Cabeza)", "y1": 0.29, "y2": 0.56, "producto": "Papas Artesanales 150g"},
              ]), "#8B5CF6", "SUC-SUR"),
         ]
-        for p in perchas_default:
-            conn.execute("""
-                INSERT OR IGNORE INTO perchas_mapa
-                (id, nombre, categoria, camara_id, map_x, map_y, map_w, map_h, roi_json, niveles_json, color, sucursal_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, p)
+        _insertar_en_lotes(
+            conn,
+            "INSERT OR IGNORE INTO perchas_mapa (id, nombre, categoria, camara_id, map_x, map_y, map_w, map_h, roi_json, niveles_json, color, sucursal_id)",
+            perchas_default,
+            chunk_size=20,
+        )
 
-        # Actualizar ROI de PER-A1 y PER-A2 en bases existentes para garantizar polígonos en perspectiva
         conn.execute(
             "UPDATE perchas_mapa SET roi_json = ? WHERE id = 'PER-A1' AND roi_json NOT LIKE '%\"poly\"%'",
             (json.dumps({"x1": 0.0, "y1": 0.285, "x2": 0.432, "y2": 1.0, "poly": POLY_PER_A1}),),
@@ -593,7 +598,6 @@ def init_analytics_sync():
             (json.dumps({"x1": 0.655, "y1": 0.29, "x2": 1.0, "y2": 1.0, "poly": POLY_PER_A2}),),
         )
 
-        # Catálogo de productos por sucursal
         catalogo_default = [
             ("CK-500", "Cereales Kellogg's 500g", "Cereales", "PER-A1", "Medio (Altura Ojos)", 48, 19, 6, "SUC-NORTE"),
             ("AC-400", "Avena Crujiente 400g", "Cereales", "PER-A1", "Superior (Subir Cabeza)", 36, 11, 1, "SUC-NORTE"),
@@ -603,23 +607,21 @@ def init_analytics_sync():
             ("LE-100", "Leche Entera Tetra 1L", "Lácteos", "PER-B2", "Superior (Subir Cabeza)", 52, 18, 2, "SUC-NORTE"),
             ("PA-150", "Papas Artesanales 150g", "Snacks", "PER-C1", "Superior (Subir Cabeza)", 38, 14, 1, "SUC-NORTE"),
             ("DL-200", "Detergente Líquido 2L", "Limpieza", "PER-C1", "Inferior (Agacharse)", 28, 5, 2, "SUC-NORTE"),
-            # Sucursal Centro
             ("CEN-CK", "Cereales Kellogg's 500g", "Cereales", "PER-CEN1", "Medio (Altura Ojos)", 32, 12, 2, "SUC-CENTRO"),
             ("CEN-PA", "Papas Artesanales 150g", "Snacks", "PER-CEN2", "Medio (Altura Ojos)", 44, 18, 2, "SUC-CENTRO"),
             ("CEN-CC", "Coca Cola Zero 500ml", "Bebidas", "PER-CEN3", "Medio (Altura Ojos)", 65, 28, 1, "SUC-CENTRO"),
             ("CEN-YG", "Yogurt Griego Natural", "Lácteos", "PER-CEN4", "Medio (Altura Ojos)", 38, 15, 2, "SUC-CENTRO"),
-            # Sucursal Sur
             ("SUR-CK", "Cereales Kellogg's 500g", "Cereales", "PER-SUR1", "Medio (Altura Ojos)", 58, 22, 4, "SUC-SUR"),
             ("SUR-PI", "Pasta Italiana 500g", "Conservas", "PER-SUR2", "Medio (Altura Ojos)", 62, 25, 2, "SUC-SUR"),
             ("SUR-LE", "Leche Entera Tetra 1L", "Lácteos", "PER-SUR3", "Medio (Altura Ojos)", 70, 29, 2, "SUC-SUR"),
             ("SUR-DL", "Detergente Líquido 2L", "Limpieza", "PER-SUR4", "Inferior (Agacharse)", 40, 14, 3, "SUC-SUR"),
         ]
-        for item in catalogo_default:
-            conn.execute("""
-                INSERT OR IGNORE INTO productos_catalogo
-                (sku, nombre, categoria, percha_id, nivel, stock, tomas_base, devoluciones_base, sucursal_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, item)
+        _insertar_en_lotes(
+            conn,
+            "INSERT OR IGNORE INTO productos_catalogo (sku, nombre, categoria, percha_id, nivel, stock, tomas_base, devoluciones_base, sucursal_id)",
+            catalogo_default,
+            chunk_size=30,
+        )
 
         promos_default = [
             ("PROMO-01", "PER-A1", "Cereales Kellogg's 500g", "2x1 en Cereales de Desayuno", "Cenefa Naranja + Stopper Lateral", "¡Lleva 2 al precio de 1!", 50, 1, "SUC-NORTE"),
@@ -631,25 +633,52 @@ def init_analytics_sync():
             ("PROMO-S1", "PER-SUR2", "Pasta Italiana 500g", "Pack Familiar 3x2 Pastas", "Cabecera Mayorista Sur", "Ahorro familiar fin de semana", 33, 1, "SUC-SUR"),
             ("PROMO-S2", "PER-SUR4", "Detergente Líquido 2L", "Mega Bidón Hogar -20%", "Cartel Aéreo Pasillo 3", "Precio mayorista", 20, 1, "SUC-SUR"),
         ]
-        for pr in promos_default:
-            conn.execute("""
-                INSERT OR IGNORE INTO promociones_percha
-                (id, percha_id, producto, titulo, tipo_publicidad, mensaje_pop, descuento_pct, activa, sucursal_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, pr)
+        _insertar_en_lotes(
+            conn,
+            "INSERT OR IGNORE INTO promociones_percha (id, percha_id, producto, titulo, tipo_publicidad, mensaje_pop, descuento_pct, activa, sucursal_id)",
+            promos_default,
+            chunk_size=20,
+        )
 
-        # Verificar versión de semilla y cobertura horaria reciente (garantiza datos completos en local y Turso)
         sem_row = conn.execute("SELECT valor FROM meta_semilla WHERE clave = 'seed_version'").fetchone()
         cnt_reciente = conn.execute(
             "SELECT COUNT(*) FROM telemetria_coordenadas WHERE creado >= datetime('now', '-24 hours')"
         ).fetchone()[0]
-        if (not sem_row or sem_row[0] != _SEED_VERSION) or cnt_reciente < 18:
-            _sembrar_historico_muestra(conn, limpiar_previos=(not sem_row or sem_row[0] != _SEED_VERSION))
-            conn.execute("INSERT OR REPLACE INTO meta_semilla (clave, valor) VALUES ('seed_version', ?)", (_SEED_VERSION,))
+        necesita_semilla = (not sem_row or sem_row[0] != _SEED_VERSION) or cnt_reciente < 18
+        limpiar_prev = not sem_row or sem_row[0] != _SEED_VERSION
 
         conn.commit()
     finally:
         _cerrar_si_local(conn)
+
+    if necesita_semilla:
+        if TURSO_URL:
+            # En Render + Turso remoto, sembrar en segundo plano para abrir $PORT en < 2 segundos sin timeout.
+            threading.Thread(
+                target=_sembrar_en_segundo_plano,
+                args=(limpiar_prev,),
+                daemon=True,
+                name="KovaqTursoSeeder",
+            ).start()
+        else:
+            conn_seed = _abrir()
+            try:
+                _sembrar_historico_muestra(conn_seed, limpiar_previos=limpiar_prev)
+                conn_seed.execute("INSERT OR REPLACE INTO meta_semilla (clave, valor) VALUES ('seed_version', ?)", (_SEED_VERSION,))
+                conn_seed.commit()
+            finally:
+                _cerrar_si_local(conn_seed)
+
+
+def _sembrar_en_segundo_plano(limpiar_previos: bool):
+    try:
+        conn = _abrir()
+        _sembrar_historico_muestra(conn, limpiar_previos=limpiar_previos)
+        conn.execute("INSERT OR REPLACE INTO meta_semilla (clave, valor) VALUES ('seed_version', ?)", (_SEED_VERSION,))
+        conn.commit()
+        log.info("Semilla histórica multi-sucursal (%s) completada en segundo plano.", _SEED_VERSION)
+    except Exception as err:
+        log.warning("Aviso ejecutando semilla en segundo plano: %s", err)
 
 
 def _sembrar_historico_muestra(conn, limpiar_previos: bool = False):
@@ -777,16 +806,20 @@ def _sembrar_historico_muestra(conn, limpiar_previos: bool = False):
             "Medio (Altura Ojos)", "frente", "empleado_excluido", "", 5.2, prods_list[0][6], suc_id, ts_st_now
         ))
 
-    conn.executemany(
-        "INSERT INTO eventos (tipo, detalle, valor, sucursal_id, creado) VALUES (?, ?, ?, ?, ?)",
-        eventos_batch
+    _insertar_en_lotes(
+        conn,
+        "INSERT INTO eventos (tipo, detalle, valor, sucursal_id, creado)",
+        eventos_batch,
+        chunk_size=140,
     )
-    conn.executemany("""
-        INSERT INTO telemetria_coordenadas
+    _insertar_en_lotes(
+        conn,
+        """INSERT INTO telemetria_coordenadas
         (sesion_anonima, es_cliente_valido, x_norm, y_norm, percha_id, nivel_percha,
-         postura_cabeza, comportamiento, producto, dwell_sec, camara_id, sucursal_id, creado)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, coords_batch)
+         postura_cabeza, comportamiento, producto, dwell_sec, camara_id, sucursal_id, creado)""",
+        coords_batch,
+        chunk_size=60,
+    )
 
 
 def regenerar_simulacion_muestra():
