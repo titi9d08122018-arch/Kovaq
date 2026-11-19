@@ -1,50 +1,48 @@
+import getpass
 from passlib.context import CryptContext
 from database import escribir, leer
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+MIN_PASSWORD_LEN = 12
+
 
 def agregar_usuario_seguro():
-    print("=========================================")
-    print("       CREAR NUEVO USUARIO - KOVAQ       ")
-    print("=========================================")
-    
-    # 1. Verificar los roles existentes en la base de datos
+    print("Crear nuevo usuario - KOVAQ")
+
     roles = leer("SELECT id, nombre FROM roles")
     if not roles:
-        print("\n❌ Error: La tabla 'roles' está vacía.")
-        print("💡 Solución: Enciende tu servidor primero con 'uvicorn main:app --reload' para que la base de datos cree los roles automáticamente.")
+        print("Error: la tabla 'roles' está vacía. Inicia primero el servidor con 'uvicorn main:app'.")
         return
-        
-    print("\nRoles disponibles en tu base de datos:")
+
+    print("\nRoles disponibles:")
     for r in roles:
         print(f"  [ID: {r[0]}] -> {r[1]}")
-        
+
     try:
-        rol_id_elegido = int(input("\nIngresa el ID del rol que deseas asignar: "))
+        rol_id_elegido = int(input("\nIngresa el ID del rol a asignar: "))
     except ValueError:
-        print("❌ Debes ingresar un número válido.")
+        print("Error: debes ingresar un número válido.")
         return
 
-    email = input("Ingresa el correo del usuario: ").strip()
-    password = input("Ingresa la contraseña: ").strip()
+    email = input("Correo o usuario: ").strip()
+    password = getpass.getpass(f"Contraseña (mínimo {MIN_PASSWORD_LEN} caracteres): ").strip()
     nombre = input("Nombre completo: ").strip()
 
-    if not email or not password:
-        print("❌ El correo y la contraseña no pueden estar vacíos.")
+    if not email or len(password) < MIN_PASSWORD_LEN:
+        print(f"Error: el usuario no puede estar vacío y la contraseña debe tener al menos {MIN_PASSWORD_LEN} caracteres.")
         return
 
-    # 2. Encriptar contraseña con Bcrypt
     hashed_pwd = pwd_context.hash(password)
 
     try:
-        # 3. Guardar en la base de datos usando el rol válido elegido
         escribir(
-            "INSERT INTO usuarios (username, password_hash, nombre_completo, rol_id) VALUES (?, ?, ?, ?)",
-            (email, hashed_pwd, nombre if nombre else "Usuario", rol_id_elegido)
+            "INSERT INTO usuarios (username, password_hash, nombre_completo, rol_id, estado) VALUES (?, ?, ?, ?, 'activo')",
+            (email, hashed_pwd, nombre or "Usuario", rol_id_elegido),
         )
-        print(f"\n✅ ¡Usuario '{email}' creado y encriptado con éxito!")
+        print(f"Usuario '{email}' creado correctamente.")
     except Exception as e:
-        print(f"\n❌ Error al guardar en la base de datos: {e}")
+        print(f"Error al guardar en la base de datos: {e}")
+
 
 if __name__ == "__main__":
     agregar_usuario_seguro()

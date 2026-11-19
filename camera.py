@@ -1,6 +1,6 @@
 import os
-import sys
 import math
+import logging
 import threading
 import queue
 import time
@@ -10,9 +10,11 @@ import numpy as np
 from dotenv import load_dotenv
 
 load_dotenv()
+log = logging.getLogger("kovaq.cam")
 
+_ES_NUBE = os.getenv("MODO", "local").lower() != "local"
 NUM_CORES = os.cpu_count() or 4
-MAX_THREADS = max(2, min(NUM_CORES, 8))
+MAX_THREADS = 1 if _ES_NUBE else max(2, min(NUM_CORES, 8))
 
 os.environ.setdefault("OMP_NUM_THREADS", str(MAX_THREADS))
 os.environ.setdefault("MKL_NUM_THREADS", str(MAX_THREADS))
@@ -21,7 +23,7 @@ os.environ.setdefault("OPENCV_FFMPEG_CAPTURE_OPTIONS", "rtsp_transport;tcp")
 import cv2
 cv2.setNumThreads(MAX_THREADS)
 
-if os.getenv("MODO", "local").lower() == "local":
+if not _ES_NUBE:
     try:
         import torch
         torch.set_num_threads(MAX_THREADS)
@@ -575,6 +577,7 @@ class CameraService:
 
     def __init__(self):
         self.lock = threading.Lock()
+        self._model_lock = threading.Lock()
         self.camara_activa_id = "CAM-01"
         self.fuente = "video"
         self.ruta = DEMO_VIDEO_PATH
@@ -586,9 +589,9 @@ class CameraService:
         self.shelf_analyzer = ShelfAnalyzer()
 
         self.latest_raw_frame = None
-        self.ultimo_frame_procesado = None
         self.frame_id = 0
         self._jpeg_id, self._jpeg = -1, None
+        self._ultimo_pruning = time.time()
 
         self.solicitud = None
         self.corriendo = self.activa = self.pausado = False
@@ -615,9 +618,9 @@ class CameraService:
         self.eventos_recientes = collections.deque(maxlen=50)
         self._event_id_seq = 0
 
-        self.zonas = (int(ANCHO * 0.10), int(ALTO * 0.14), int(ANCHO * 0.90), int(ALTO * 0.85))
         self.perchas_config = []
         self.camaras_config = {}
+        self.camaras_lista_cache = []
 
         # Reporte estructurado de los 10 segundos del video de respaldo (`demo_supermercado.mp4`)
         self.analisis_video_10s = {
@@ -674,23 +677,27 @@ class CameraService:
         }
 
     def _cargar_modelo_yolo(self):
-        if self.modelo is None:
-            try:
-                from ultralytics import YOLO
-                model_file = 'yolov8n.onnx' if os.path.exists('yolov8n.onnx') else 'yolov8n.pt'
-                self.modelo = YOLO(model_file, **({'task': 'detect'} if model_file.endswith('.onnx') else {}))
-            except Exception as e:
-                print(f"[KovaqYOLO] Aviso cargando modelo: {e}")
+        with self._model_lock:
+            if self.modelo is None:
+                try:
+                    from ultralytics import YOLO
+                    onnx_path = os.path.join(BASE_DIR, "yolov8n.onnx")
+                    pt_path = os.path.join(BASE_DIR, "yolov8n.pt")
+                    model_file = onnx_path if os.path.exists(onnx_path) else pt_path
+                    self.modelo = YOLO(model_file, **({'task': 'detect'} if model_file.endswith('.onnx') else {}))
+                except Exception as e:
+                    log.warning("Aviso cargando modelo YOLO: %s", e)
 
     def recargar_mapa_tienda(self):
         try:
             cams = obtener_camaras_mapa()
             perchas = obtener_perchas_mapa()
             with self.lock:
+                self.camaras_lista_cache = cams
                 self.camaras_config = {c["id"]: c.get("zona_2d", {}) for c in cams}
                 self.perchas_config = perchas
         except Exception as e:
-            print(f"[KovaqMap] Error sincronizando mapa de tienda: {e}")
+            log.warning("Error sincronizando mapa de tienda: %s", e)
 
     def _obtener_perchas_de_camara(self, cam_id: str):
         with self.lock:
@@ -821,7 +828,9 @@ class CameraService:
         with self.lock:
             self.latest_raw_frame = None
             self._jpeg = None
-        if self.cap is not None:
+            self._jpeg_id = -1
+        # Solo liberar cap directamente si no hay hilo de captura activo (evita data race).
+        if (self.hilo_lectura is None or not self.hilo_lectura.is_alive()) and self.cap is not None:
             try:
                 self.cap.release()
             except Exception:
@@ -839,14 +848,10 @@ class CameraService:
         self.pausado = False
 
     def procesar_archivo_subido_inmediato(self, tipo: str, ruta: str) -> dict:
-        """
-        Analiza al instante un video o imagen recién subido por el usuario (funciona tanto en MODO=local como en MODO=nube):
-        - Si es imagen: ejecuta el análisis de frame completo (perchas, postura de cabeza, exclusión de staff, coordenadas 2D).
-        - Si es video: muestrea fotogramas clave a lo largo del clip, ejecuta YOLOv8n + ShelfAnalyzer + MultiCameraTracker,
-          persiste los eventos/coordenadas en Turso y si los hilos de streaming no estaban activos los arranca.
-        """
+        """Analiza fotogramas clave de un video o imagen subida sin bloquear el plan Free."""
         self._cargar_modelo_yolo()
-        self.recargar_mapa_tienda()
+        if not self.perchas_config:
+            self.recargar_mapa_tienda()
 
         if not os.path.exists(ruta):
             return {"ok": False, "frames_analizados": 0, "resumen": "Archivo no encontrado"}
@@ -855,6 +860,7 @@ class CameraService:
         agarrados_antes = self.total_agarrados
         devueltos_antes = self.total_devueltos
         entradas_antes = self.total_entradas
+        en_nube = os.getenv("MODO", "local").lower() != "local"
 
         if tipo == "imagen":
             img = cv2.imread(ruta)
@@ -869,11 +875,10 @@ class CameraService:
         else:
             cap_tmp = cv2.VideoCapture(ruta)
             if cap_tmp and cap_tmp.isOpened():
-                total_f = int(cap_tmp.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
                 fps_v = float(cap_tmp.get(cv2.CAP_PROP_FPS) or 24.0)
-                salto = max(1, int(fps_v // 4))  # ~4 evaluaciones por segundo para analizar el clip al instante
+                salto = max(1, int(fps_v // (2 if en_nube else 4)))
                 f_idx = 0
-                max_evaluaciones = 36
+                max_evaluaciones = 18 if en_nube else 36
                 while frames_analizados < max_evaluaciones:
                     ok, frame = cap_tmp.read()
                     if not ok or frame is None:
@@ -883,22 +888,21 @@ class CameraService:
                         with self.lock:
                             self.latest_raw_frame = frame_res
                             self.frame_id += 1
-                        self._analizar_frame_ia(frame_res, rastrear=True)
+                        self._analizar_frame_ia(frame_res, rastrear=(not en_nube))
                         frames_analizados += 1
                     f_idx += 1
                 cap_tmp.release()
                 self.get_frame_bytes(-1)
 
-        # Activar también el stream continuo con el archivo subido
-        self.cambiar_fuente(tipo, ruta)
-        if self.hilo_lectura is None or not self.hilo_lectura.is_alive():
-            self._abrir_captura(tipo, ruta, reiniciar=False)
-            self.hilo_lectura = threading.Thread(target=self._leer_camara, daemon=True, name="KovaqCamCapture")
-            self.hilo_ia = threading.Thread(target=self._worker_ia_desacoplado, daemon=True, name="KovaqYoloWorker")
-            self.hilo_lectura.start()
-            self.hilo_ia.start()
+        # Solo arrancar bucle continuo en modo local; en nube se sirve el último frame analizado sin saturar CPU.
+        if not en_nube:
+            self.cambiar_fuente(tipo, ruta)
+            if self.hilo_lectura is None or not self.hilo_lectura.is_alive():
+                self.hilo_lectura = threading.Thread(target=self._leer_camara, daemon=True, name="KovaqCamCapture")
+                self.hilo_ia = threading.Thread(target=self._worker_ia_desacoplado, daemon=True, name="KovaqYoloWorker")
+                self.hilo_lectura.start()
+                self.hilo_ia.start()
 
-        # Persistir inmediatamente en Turso/SQLite todos los eventos generados por el análisis instantáneo
         self.flush_cola_db()
 
         nuevas_entradas = max(0, self.total_entradas - entradas_antes)
@@ -915,14 +919,10 @@ class CameraService:
             "personas_en_escena": len(self.overlay_data.get("personas", [])),
             "resumen": (
                 f"Analizados {frames_analizados} fotogramas clave al instante: "
-                f"{ len(self.overlay_data.get('personas', [])) } vectores en escena, "
+                f"{len(self.overlay_data.get('personas', []))} vectores en escena, "
                 f"{nuevos_tomados} tomas y {nuevos_devueltos} devoluciones detectadas."
             )
         }
-
-    def repetir(self):
-        if self.fuente == "video" and self.ruta:
-            self.cambiar_fuente("video", self.ruta)
 
     def estado_dict(self):
         return {
@@ -940,14 +940,8 @@ class CameraService:
         }
 
     def obtener_estado_mapa_2d(self):
-        """
-        Devuelve el estado completo del Plano 2D Anónimo del Lugar:
-        - Zonas de Puerta de Entrada y Línea de Cajas (para validar clientes vs empleados).
-        - Matriz de Zonas Calientes y Zonas Frías (`heatmap_grid`).
-        - Perchas con su Planograma y Promociones POP activas.
-        - Vectores de coordenadas anónimas (`S#101`, `S#102`, `STAFF-01` excluido) con postura de cabeza.
-        """
-        self.recargar_mapa_tienda()
+        if not self.perchas_config or not self.camaras_lista_cache:
+            self.recargar_mapa_tienda()
         ahora = time.time()
         personas_mapa = []
 
@@ -1001,6 +995,10 @@ class CameraService:
 
         clientes_validos_activos = sum(1 for p in personas_mapa if p.get("es_cliente_valido", True))
 
+        with self.lock:
+            camaras_copia = list(self.camaras_lista_cache)
+            perchas_copia = list(self.perchas_config)
+
         return {
             "camara_activa": self.camara_activa_id,
             "simulacion_activa": self.mtmc.simulacion_activa,
@@ -1011,8 +1009,8 @@ class CameraService:
             },
             "heatmap_grid": grid_copy,
             "analisis_video_10s": self.analisis_video_10s,
-            "camaras": obtener_camaras_mapa(),
-            "perchas": self.perchas_config,
+            "camaras": camaras_copia,
+            "perchas": perchas_copia,
             "personas": personas_mapa,
             "handoffs": handoffs_lista,
             "metricas": {
@@ -1109,7 +1107,7 @@ class CameraService:
             except queue.Empty:
                 continue
             except Exception as e:
-                print(f"[KovaqDB] Error registrando evento en segundo plano: {e}")
+                log.warning("Error registrando evento en segundo plano: %s", e)
 
     def _registrar_evento_memoria(self, tipo_evento, sesion_id, producto_nombre, confianza, coords,
                                   color="naranja", percha_id="PER-A1", percha_nombre="Percha A1",
@@ -1135,9 +1133,7 @@ class CameraService:
         with self.lock:
             self.eventos_recientes.appendleft(item)
 
-    # =========================================================================
-    # MOTOR DE SIMULACIÓN ANÓNIMA DE COORDENADAS (PUERTA -> PERCHAS -> CAJA)
-    # =========================================================================
+    # Simulación en memoria del gemelo digital (sin inflar Turso en reposo)
     def _worker_simulacion_papel(self):
         dt = 0.25
         while self.corriendo:
@@ -1154,7 +1150,6 @@ class CameraService:
                     if es_cli and gid not in self.tiempos_clientes:
                         self.tiempos_clientes[gid] = ahora
                         self.total_entradas += 1
-                        self._encolar_db("trafico")
 
                     wps = ag["waypoints"]
                     wp = wps[ag["wp_idx"]]
@@ -1171,8 +1166,6 @@ class CameraService:
                         ag["percha_actual"] = None
                         ag["postura_cabeza"] = "Vista al Frente (Pasillo)"
                         ag["estado_accion"] = "Desplazamiento Anónimo" if es_cli else "Staff Reposición (Ignorado)"
-                        if es_cli and duracion > 1.0:
-                            self._encolar_db("permanencia", round(duracion, 1))
                         ag["wp_idx"] = (ag["wp_idx"] + 1) % len(wps)
                         continue
 
@@ -1208,12 +1201,11 @@ class CameraService:
                                 "map_y": round(ty, 3),
                             }
                             self.mtmc.handoffs.appendleft(handoff_ev)
-                            self._encolar_db("handoff", gid, cam_prev, nueva_cam, sim_reid)
                             self._registrar_evento_memoria(
                                 "Continuidad Cámara", gid,
-                                f"{cam_prev} → {nueva_cam} (Coordenada [{tx:.2f}, {ty:.2f}])",
+                                f"{cam_prev} -> {nueva_cam} (Coordenada [{tx:.2f}, {ty:.2f}])",
                                 sim_reid, [round(tx, 2), round(ty, 2)],
-                                color="verde", percha_id=nueva_cam, percha_nombre=f"Zona {cam_prev}→{nueva_cam}",
+                                color="verde", percha_id=nueva_cam, percha_nombre=f"Zona {cam_prev}->{nueva_cam}",
                                 camara_id=nueva_cam, postura_cabeza=postura_cab, comportamiento="transito"
                             )
 
@@ -1228,11 +1220,6 @@ class CameraService:
                                 ag["estado_accion"] = f"{postura_cab} • Tomó {prod_nombre}"
                                 ag["bolsa"].add(prod_nombre)
                                 self.total_agarrados += 1
-                                self._encolar_db("tomado", prod_nombre, gid, percha_id)
-                                self._encolar_db(
-                                    "coordenada", f"VEC-{gid}", 1, tx, ty, percha_id,
-                                    postura_cab, postura_cab, tipo_comp, prod_nombre, duracion, ag["camara_actual"]
-                                )
                                 self._registrar_evento_memoria(
                                     "Producto Tomado", gid, f"{prod_nombre} [{postura_cab}]", 0.96, coords_norm_2d,
                                     color="naranja", percha_id=percha_id, percha_nombre=percha_id,
@@ -1242,11 +1229,6 @@ class CameraService:
                                 ag["estado_accion"] = f"Último Momento: Devolvió {prod_nombre} ({percha_id})"
                                 ag["bolsa"].discard(prod_nombre)
                                 self.total_devueltos += 1
-                                self._encolar_db("devuelto", prod_nombre, gid, percha_id)
-                                self._encolar_db(
-                                    "coordenada", f"VEC-{gid}", 1, tx, ty, percha_id,
-                                    postura_cab, postura_cab, "ultimo_momento_devuelve", prod_nombre, duracion, ag["camara_actual"]
-                                )
                                 self._registrar_evento_memoria(
                                     "Devuelto (Último Momento)", gid, f"{prod_nombre} [{postura_cab}]", 0.95, coords_norm_2d,
                                     color="azul", percha_id=percha_id, percha_nombre=percha_id,
@@ -1254,10 +1236,6 @@ class CameraService:
                                 )
                             else:
                                 ag["estado_accion"] = f"Solo Mira ({duracion:.1f}s): {postura_cab} en {percha_id}"
-                                self._encolar_db(
-                                    "coordenada", f"VEC-{gid}", 1, tx, ty, percha_id,
-                                    postura_cab, postura_cab, "solo_mira", prod_nombre or "", duracion, ag["camara_actual"]
-                                )
                         elif accion == "salida_caja":
                             ag["esperando_hasta"] = ahora + duracion
                             ag["accion_ejecutada"] = True
@@ -1475,6 +1453,32 @@ class CameraService:
             if INTERVALO_IA > 0:
                 time.sleep(INTERVALO_IA)
 
+    def _purgar_tracks_expirados(self, ahora: float, ttl_seg: float = 90.0):
+        """Libera memoria de tracks inactivos para evitar fugas en sesiones largas."""
+        if ahora - self._ultimo_pruning < 30.0:
+            return
+        self._ultimo_pruning = ahora
+        expirados = []
+        with self.mtmc.lock:
+            for gid, tr in list(self.mtmc.global_tracks.items()):
+                if ahora - tr.get("last_seen", 0.0) > ttl_seg:
+                    expirados.append(gid)
+                    self.mtmc.global_tracks.pop(gid, None)
+            if expirados:
+                exp_set = set(expirados)
+                for k, v in list(self.mtmc.local_to_global.items()):
+                    if v in exp_set:
+                        self.mtmc.local_to_global.pop(k, None)
+        for gid in expirados:
+            self.tiempos_clientes.pop(gid, None)
+            self.tiempos_zona.pop(gid, None)
+            self.productos_en_mano.pop(gid, None)
+            self.shelf_analyzer.alturas_base_persona.pop(gid, None)
+            for k in [k for k in self.ultimo_reach_zona if k[0] == gid]:
+                self.ultimo_reach_zona.pop(k, None)
+            for k in [k for k in self.shelf_analyzer.parche_pre_interaccion if k[1] == gid]:
+                self.shelf_analyzer.parche_pre_interaccion.pop(k, None)
+
     def _analizar_frame_ia(self, frame, rastrear=True, cam_id_override=None):
         self._cargar_modelo_yolo()
         if self.modelo is None:
@@ -1483,31 +1487,33 @@ class CameraService:
         cam_id = cam_id_override or self.camara_activa_id
         perchas_cam = self._obtener_perchas_de_camara(cam_id)
         frame_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        self._purgar_tracks_expirados(time.time())
 
-        try:
-            if rastrear:
-                res = self.modelo.track(
-                    frame,
-                    persist=True,
-                    classes=CLASES_RETAIL,
-                    verbose=False,
-                    imgsz=IMGSZ,
-                    conf=CONF,
-                    tracker="bytetrack.yaml"
-                )[0]
-            else:
-                res = self.modelo.predict(
-                    frame,
-                    classes=CLASES_RETAIL,
-                    verbose=False,
-                    imgsz=IMGSZ,
-                    conf=CONF
-                )[0]
-        except Exception:
+        with self._model_lock:
             try:
-                res = self.modelo.predict(frame, classes=CLASES_RETAIL, verbose=False, imgsz=IMGSZ, conf=CONF)[0]
+                if rastrear:
+                    res = self.modelo.track(
+                        frame,
+                        persist=True,
+                        classes=CLASES_RETAIL,
+                        verbose=False,
+                        imgsz=IMGSZ,
+                        conf=CONF,
+                        tracker="bytetrack.yaml"
+                    )[0]
+                else:
+                    res = self.modelo.predict(
+                        frame,
+                        classes=CLASES_RETAIL,
+                        verbose=False,
+                        imgsz=IMGSZ,
+                        conf=CONF
+                    )[0]
             except Exception:
-                return
+                try:
+                    res = self.modelo.predict(frame, classes=CLASES_RETAIL, verbose=False, imgsz=IMGSZ, conf=CONF)[0]
+                except Exception:
+                    return
 
         personas_detectadas = []
         productos_detectados = []
@@ -1807,12 +1813,17 @@ class CameraService:
             raw = self.latest_raw_frame
             fid = self.frame_id
             overlay = self.overlay_data
+            cached_id = self._jpeg_id
+            cached_jpg = self._jpeg
 
         if raw is None:
             return ultimo_id, None
 
-        if fid == ultimo_id and self._jpeg is not None:
+        if fid == ultimo_id and cached_jpg is not None:
             return ultimo_id, None
+
+        if fid == cached_id and cached_jpg is not None:
+            return fid, cached_jpg
 
         canvas = raw.copy()
         if self.dibujar_hud and overlay:

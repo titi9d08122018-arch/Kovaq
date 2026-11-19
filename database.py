@@ -1,4 +1,5 @@
 import os
+import re
 import json
 import logging
 import threading
@@ -15,8 +16,10 @@ pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 log = logging.getLogger("kovaq.db")
 ADMIN_PASSWORD_MIN = 12
 
-# Conexión persistente por hilo cuando se usa Turso para evitar latencia de handshake TLS
-# y prevenir errores HTTP 502 en Render. En SQLite local abrimos por operación con WAL.
+_FECHA_ISO_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_COLUMNAS_FECHA_VALIDAS = {"creado"}
+
+# Reutiliza conexión por hilo en Turso para evitar handshakes TLS repetidos en Render.
 _tls = threading.local()
 
 
@@ -25,14 +28,7 @@ def _abrir():
         cached = getattr(_tls, "conn", None)
         cached_url = getattr(_tls, "url", None)
         if cached is not None and cached_url == TURSO_URL:
-            try:
-                cached.execute("SELECT 1")
-                return cached
-            except Exception:
-                try:
-                    cached.close()
-                except Exception:
-                    pass
+            return cached
         conn = libsql.connect(database=TURSO_URL, auth_token=TURSO_TOKEN)
         _tls.conn = conn
         _tls.url = TURSO_URL
@@ -41,6 +37,7 @@ def _abrir():
     conn = libsql.connect(database=DB_LOCAL)
     conn.execute("PRAGMA journal_mode=WAL;")
     conn.execute("PRAGMA synchronous=NORMAL;")
+    conn.execute("PRAGMA foreign_keys=ON;")
     return conn
 
 
@@ -52,13 +49,18 @@ def _cerrar_si_local(conn):
             pass
 
 
+def _es_error_integridad(err: Exception) -> bool:
+    msg = str(err).lower()
+    return any(tok in msg for tok in ("unique", "constraint", "foreign key", "syntax", "no such"))
+
+
 def leer(query: str, params: tuple = (), uno: bool = False):
     conn = _abrir()
     try:
         cur = conn.execute(query, params)
         return cur.fetchone() if uno else cur.fetchall()
-    except Exception:
-        if TURSO_URL:
+    except Exception as err:
+        if TURSO_URL and not _es_error_integridad(err):
             _tls.conn = None
             conn = _abrir()
             cur = conn.execute(query, params)
@@ -73,8 +75,8 @@ def escribir(query: str, params: tuple = ()):
     try:
         conn.execute(query, params)
         conn.commit()
-    except Exception:
-        if TURSO_URL:
+    except Exception as err:
+        if TURSO_URL and not _es_error_integridad(err):
             _tls.conn = None
             conn = _abrir()
             conn.execute(query, params)
@@ -83,20 +85,6 @@ def escribir(query: str, params: tuple = ()):
         raise
     finally:
         _cerrar_si_local(conn)
-
-
-def obtener_rotacion(dias: int):
-    """Consulta la rotación de productos según el período que pida el cliente."""
-    query = """
-        SELECT detalle as producto, COUNT(*) as interacciones 
-        FROM eventos 
-        WHERE tipo = 'interaccion' AND creado >= date('now', ?)
-        GROUP BY detalle 
-        ORDER BY interacciones ASC 
-        LIMIT 5
-    """
-    modificador_fecha = f"-{dias} days"
-    return leer(query, (modificador_fecha,))
 
 
 def init_db_sync():
@@ -119,6 +107,8 @@ def init_db_sync():
             detalle TEXT,
             valor REAL,
             creado TEXT DEFAULT CURRENT_TIMESTAMP)""")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_eventos_tipo_creado ON eventos(tipo, creado)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_eventos_creado ON eventos(creado)")
 
         for rol in ("admin", "admin_tecnico", "dueno", "encargado", "vendedor"):
             conn.execute("INSERT OR IGNORE INTO roles (nombre) VALUES (?)", (rol,))
@@ -164,11 +154,10 @@ def guardar_interaccion(producto: str):
 
 
 def guardar_producto_tomado(producto: str, sesion_id: int = None, percha_nombre: str = None):
-    """Registra toma de producto de forma 100% anónima (usa vector de sesión efímera, cero identidad personal)."""
+    """Registra toma de producto con sesión anónima efímera (una sola fila canónica)."""
     etiqueta_percha = f" [{percha_nombre}]" if percha_nombre else ""
     detalle = f"{producto}{etiqueta_percha} (Vector S#{sesion_id})" if sesion_id else f"{producto}{etiqueta_percha}"
     escribir("INSERT INTO eventos (tipo, detalle, valor) VALUES ('producto_tomado', ?, ?)", (detalle, float(sesion_id or 0)))
-    escribir("INSERT INTO eventos (tipo, detalle) VALUES ('interaccion', ?)", (producto,))
 
 
 def guardar_producto_devuelto(producto: str, sesion_id: int = None, percha_nombre: str = None):
@@ -220,9 +209,7 @@ async def init_db():
     await asyncio.to_thread(init_db_sync)
 
 
-# ==========================================
-# MÓDULO DE ANALÍTICA AVANZADA, PLANOGRAMA, PROMOCIONES Y PRIVACIDAD (v4)
-# ==========================================
+# Analítica avanzada, planograma, promociones y telemetría anónima
 
 def init_analytics_sync():
     """Inicializa tablas para categorización, mapeo cenital de cámaras, planograma de perchas, promociones POP y coordenadas anónimas."""
@@ -309,6 +296,8 @@ def init_analytics_sync():
             camara_id TEXT DEFAULT 'CAM-01',
             creado TEXT DEFAULT CURRENT_TIMESTAMP
         )""")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_tc_valido_creado ON telemetria_coordenadas(es_cliente_valido, creado)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_tc_percha_comp ON telemetria_coordenadas(percha_id, comportamiento, creado)")
 
         cats = {
             "Cereales": ["Cereales Kellogg's 500g", "Avena Crujiente 400g", "Barras de Cereal Mix"],
@@ -571,10 +560,8 @@ def _sembrar_historico_muestra(conn):
 
             if comp in ("mira_y_compra", "no_mira_y_compra"):
                 eventos_batch.append(("producto_tomado", f"{prod} [{pid}] ({sesion_id})", float(v + 1), ts_str))
-                eventos_batch.append(("interaccion", prod, None, ts_str))
             elif comp == "ultimo_momento_devuelve":
                 eventos_batch.append(("producto_tomado", f"{prod} [{pid}] ({sesion_id})", float(v + 1), ts_str))
-                eventos_batch.append(("interaccion", prod, None, ts_str))
                 eventos_batch.append(("producto_devuelto", f"{prod} [{pid}] ({sesion_id})", float(v + 1), ts_str))
 
         # Registrar 1 evento de empleado excluido cada 3 días para auditoría de filtro Puerta->Caja
@@ -595,16 +582,20 @@ def _sembrar_historico_muestra(conn):
 
 
 def _construir_filtro_fecha(dias: int = 30, fecha_inicio: str = None, fecha_fin: str = None, col: str = "creado"):
-    """
-    Construye una cláusula SQL y tupla de parámetros para filtrar por:
-    - Rango personalizado `fecha_inicio` (YYYY-MM-DD) y `fecha_fin` (YYYY-MM-DD), o
-    - Últimos `dias` días.
-    """
-    if fecha_inicio and fecha_fin:
-        return f"{col} >= datetime(?) AND {col} <= datetime(?, '+23 hours', '+59 minutes', '+59 seconds')", (fecha_inicio.strip(), fecha_fin.strip())
-    elif fecha_inicio:
-        return f"{col} >= datetime(?)", (fecha_inicio.strip(),)
-    dias_val = max(1, int(dias or 30))
+    """Construye cláusula SQL segura para rango YYYY-MM-DD o ventana de días."""
+    if col not in _COLUMNAS_FECHA_VALIDAS:
+        raise ValueError("Columna de fecha no permitida")
+    fi = fecha_inicio.strip() if fecha_inicio else None
+    ff = fecha_fin.strip() if fecha_fin else None
+    if fi and not _FECHA_ISO_RE.match(fi):
+        raise ValueError("fecha_inicio debe tener formato YYYY-MM-DD")
+    if ff and not _FECHA_ISO_RE.match(ff):
+        raise ValueError("fecha_fin debe tener formato YYYY-MM-DD")
+    if fi and ff:
+        return f"{col} >= datetime(?) AND {col} <= datetime(?, '+23 hours', '+59 minutes', '+59 seconds')", (fi, ff)
+    if fi:
+        return f"{col} >= datetime(?)", (fi,)
+    dias_val = max(1, min(365, int(dias or 30)))
     return f"{col} >= datetime('now', ?)", (f"-{dias_val} days",)
 
 
@@ -691,7 +682,7 @@ def eliminar_promocion_percha(promo_id: str):
     escribir("DELETE FROM promociones_percha WHERE id = ?", (promo_id,))
 
 
-def obtener_perchas_mapa(dias: int = 30, fecha_inicio: str = None, fecha_fin: str = None):
+def obtener_perchas_mapa(dias: int = 30, fecha_inicio: str = None, fecha_fin: str = None, promos: list = None):
     filas = leer("""
         SELECT id, nombre, categoria, camara_id, map_x, map_y, map_w, map_h, roi_json, niveles_json, color
         FROM perchas_mapa ORDER BY id
@@ -700,19 +691,20 @@ def obtener_perchas_mapa(dias: int = 30, fecha_inicio: str = None, fecha_fin: st
     tomas_rows = leer(f"SELECT detalle, COUNT(*) FROM eventos WHERE tipo = 'producto_tomado' AND {where_ev} GROUP BY detalle", params_ev)
     dev_rows = leer(f"SELECT detalle, COUNT(*) FROM eventos WHERE tipo = 'producto_devuelto' AND {where_ev} GROUP BY detalle", params_ev)
     coords_rows = leer(f"""
-        SELECT percha_id, comportamiento, COUNT(*), AVG(dwell_sec)
+        SELECT percha_id, comportamiento, COUNT(*), COALESCE(SUM(dwell_sec), 0)
         FROM telemetria_coordenadas
         WHERE es_cliente_valido = 1 AND {where_ev}
         GROUP BY percha_id, comportamiento
     """, params_ev)
-    promos = obtener_promociones_percha()
+    promos = promos if promos is not None else obtener_promociones_percha()
     promos_por_percha = {}
     for pr in promos:
         if pr["activa"]:
             promos_por_percha.setdefault(pr["percha_id"], []).append(pr)
 
     stats_percha = {}
-    for pid_c, comp, cnt, avg_d in coords_rows:
+    dwell_acc = {}
+    for pid_c, comp, cnt, sum_d in coords_rows:
         if not pid_c:
             continue
         d = stats_percha.setdefault(pid_c, {
@@ -721,8 +713,12 @@ def obtener_perchas_mapa(dias: int = 30, fecha_inicio: str = None, fecha_fin: st
         })
         if comp in d:
             d[comp] += int(cnt)
-        if avg_d:
-            d["dwell_prom"] = round(float(avg_d), 1)
+        acc = dwell_acc.setdefault(pid_c, [0.0, 0])
+        acc[0] += float(sum_d or 0.0)
+        acc[1] += int(cnt or 0)
+    for pid_c, (tot_d, tot_n) in dwell_acc.items():
+        if tot_n > 0:
+            stats_percha[pid_c]["dwell_prom"] = round(tot_d / tot_n, 1)
 
     res = []
     for f in filas:
@@ -737,15 +733,16 @@ def obtener_perchas_mapa(dias: int = 30, fecha_inicio: str = None, fecha_fin: st
         except Exception:
             niveles = []
 
-        tomas_percha = sum(cnt for det, cnt in tomas_rows if det and (pid in det or pnombre in det))
-        dev_percha = sum(cnt for det, cnt in dev_rows if det and (pid in det or pnombre in det))
+        tomas_ev = sum(cnt for det, cnt in tomas_rows if det and (pid in det or pnombre in det))
+        dev_ev = sum(cnt for det, cnt in dev_rows if det and (pid in det or pnombre in det))
         st = stats_percha.get(pid, {
             "mira_y_compra": 0, "no_mira_y_compra": 0, "solo_mira": 0,
-            "ultimo_momento_devuelve": 0, "dwell_prom": 3.2
+            "ultimo_momento_devuelve": 0, "dwell_prom": 0.0
         })
-        total_tomas = max(1, tomas_percha + st["mira_y_compra"] + st["no_mira_y_compra"])
-        total_dev = dev_percha + st["ultimo_momento_devuelve"]
-        temperatura = "caliente" if total_tomas >= 12 else ("templada" if total_tomas >= 6 else "fria")
+        tomas_coords = st["mira_y_compra"] + st["no_mira_y_compra"] + st["ultimo_momento_devuelve"]
+        total_tomas = max(tomas_ev, tomas_coords)
+        total_dev = max(dev_ev, st["ultimo_momento_devuelve"])
+        temperatura = "caliente" if total_tomas >= 12 else ("templada" if total_tomas >= 5 else "fria")
 
         res.append({
             "id": pid,
@@ -792,8 +789,8 @@ def registrar_o_actualizar_percha_mapa(percha_id: str, nombre: str, categoria: s
             """, (sku, prod_nom, categoria, percha_id, niv_nom))
 
 
-def obtener_inventario_real(dias: int = 30, fecha_inicio: str = None, fecha_fin: str = None):
-    """Devuelve el catálogo de productos enriquecido con planograma, promociones activas e interacciones reales del período."""
+def obtener_inventario_real(dias: int = 30, fecha_inicio: str = None, fecha_fin: str = None, promos: list = None):
+    """Devuelve el catálogo enriquecido con planograma, promociones activas y tomas reales 1x del período."""
     filas = leer("""
         SELECT c.sku, c.nombre, c.categoria, c.percha_id, COALESCE(p.nombre, c.percha_id),
                c.nivel, c.stock, c.tomas_base, c.devoluciones_base
@@ -804,27 +801,25 @@ def obtener_inventario_real(dias: int = 30, fecha_inicio: str = None, fecha_fin:
     where_ev, params_ev = _construir_filtro_fecha(dias, fecha_inicio, fecha_fin, "creado")
     tomas_db = dict(leer(f"""
         SELECT detalle, COUNT(*) FROM eventos
-        WHERE tipo IN ('interaccion', 'producto_tomado') AND {where_ev} GROUP BY detalle
+        WHERE tipo = 'producto_tomado' AND {where_ev} GROUP BY detalle
     """, params_ev))
     dev_db = dict(leer(f"""
         SELECT detalle, COUNT(*) FROM eventos
         WHERE tipo = 'producto_devuelto' AND {where_ev} GROUP BY detalle
     """, params_ev))
-    promos = obtener_promociones_percha()
+    promos = promos if promos is not None else obtener_promociones_percha()
     promo_por_prod = {pr["producto"].lower(): pr for pr in promos if pr["activa"]}
     promo_por_percha = {pr["percha_id"]: pr for pr in promos if pr["activa"]}
 
     trafico_total = max(1, (leer(f"SELECT COUNT(*) FROM eventos WHERE tipo = 'trafico' AND {where_ev}", params_ev, uno=True) or [0])[0])
 
     items = []
-    for sku, nombre, cat, pid, pnombre, nivel, stock, t_base, d_base in filas:
-        extra_tomas = sum(cnt for det, cnt in tomas_db.items() if det and nombre.lower() in det.lower())
-        extra_dev = sum(cnt for det, cnt in dev_db.items() if det and nombre.lower() in det.lower())
-        total_tomas = max(1, int(extra_tomas)) if extra_tomas > 0 else max(1, int(t_base // 3))
-        total_dev = int(extra_dev) if extra_tomas > 0 else int(d_base // 3)
+    for sku, nombre, cat, pid, pnombre, nivel, stock, _t_base, _d_base in filas:
+        total_tomas = int(sum(cnt for det, cnt in tomas_db.items() if det and nombre.lower() in det.lower()))
+        total_dev = int(sum(cnt for det, cnt in dev_db.items() if det and nombre.lower() in det.lower()))
         netos = max(0, total_tomas - total_dev)
-        stock_actual = max(2, int(stock) - (netos % max(3, int(stock) - 2)))
-        evacuacion = round(min(99.9, (netos / max(10, trafico_total)) * 100.0), 1)
+        stock_actual = max(0, int(stock) - netos)
+        evacuacion = round(min(100.0, (netos / max(1, trafico_total)) * 100.0), 1)
         promo = promo_por_prod.get(nombre.lower()) or promo_por_percha.get(pid)
 
         if total_dev >= 3 and (total_dev / max(1, total_tomas)) >= 0.22:
@@ -858,13 +853,10 @@ def obtener_inventario_real(dias: int = 30, fecha_inicio: str = None, fecha_fin:
 
 
 def obtener_resumen_ejecutivo_publicidad(dias: int = 30, fecha_inicio: str = None, fecha_fin: str = None):
-    """
-    Cruza las coordenadas anónimas del período seleccionado (Día, Semana, Mes o Rango de Fechas)
-    con el planograma y las promociones activas para entregar los KPIs ejecutivos clave.
-    """
-    perchas = obtener_perchas_mapa(dias, fecha_inicio, fecha_fin)
-    inventario = obtener_inventario_real(dias, fecha_inicio, fecha_fin)
+    """Cruza coordenadas anónimas, planograma y promociones activas del período con consultas consolidadas."""
     promos = obtener_promociones_percha()
+    perchas = obtener_perchas_mapa(dias, fecha_inicio, fecha_fin, promos=promos)
+    inventario = obtener_inventario_real(dias, fecha_inicio, fecha_fin, promos=promos)
     where_tc, params_tc = _construir_filtro_fecha(dias, fecha_inicio, fecha_fin, "creado")
 
     filas_comp = leer(f"""
@@ -874,15 +866,15 @@ def obtener_resumen_ejecutivo_publicidad(dias: int = 30, fecha_inicio: str = Non
         GROUP BY comportamiento
     """, params_tc)
     comp_map = {
-        "mira_y_compra": {"casos": 0, "dwell": 4.2},
-        "no_mira_y_compra": {"casos": 0, "dwell": 1.3},
-        "solo_mira": {"casos": 0, "dwell": 3.4},
-        "ultimo_momento_devuelve": {"casos": 0, "dwell": 4.4},
+        "mira_y_compra": {"casos": 0, "dwell": 0.0},
+        "no_mira_y_compra": {"casos": 0, "dwell": 0.0},
+        "solo_mira": {"casos": 0, "dwell": 0.0},
+        "ultimo_momento_devuelve": {"casos": 0, "dwell": 0.0},
     }
     for comp, cnt, avg_d in filas_comp:
         if comp in comp_map:
             comp_map[comp]["casos"] += int(cnt)
-            comp_map[comp]["dwell"] = round(float(avg_d or comp_map[comp]["dwell"]), 1)
+            comp_map[comp]["dwell"] = round(float(avg_d or 0.0), 1)
 
     filas_postura = leer(f"""
         SELECT postura_cabeza, COUNT(*)
@@ -906,12 +898,15 @@ def obtener_resumen_ejecutivo_publicidad(dias: int = 30, fecha_inicio: str = Non
         else:
             postura_map["frente_pasillo"] += int(cnt)
 
-    empleados_excluidos = (leer(
-        f"SELECT COUNT(*) FROM telemetria_coordenadas WHERE es_cliente_valido = 0 AND {where_tc}", params_tc, uno=True
-    ) or [1])[0]
-    clientes_validados = (leer(
-        f"SELECT COUNT(DISTINCT sesion_anonima) FROM telemetria_coordenadas WHERE es_cliente_valido = 1 AND {where_tc}", params_tc, uno=True
-    ) or [3])[0]
+    fila_priv = leer(f"""
+        SELECT
+            COALESCE(SUM(CASE WHEN es_cliente_valido = 0 THEN 1 ELSE 0 END), 0),
+            COUNT(DISTINCT CASE WHEN es_cliente_valido = 1 THEN sesion_anonima END)
+        FROM telemetria_coordenadas
+        WHERE {where_tc}
+    """, params_tc, uno=True) or (0, 0)
+    empleados_excluidos = int(fila_priv[0] or 0)
+    clientes_validados = int(fila_priv[1] or 0)
 
     perchas_ordenadas = sorted(perchas, key=lambda p: p["tomas"], reverse=True)
     zonas_calientes = [
@@ -941,19 +936,21 @@ def obtener_resumen_ejecutivo_publicidad(dias: int = 30, fecha_inicio: str = Non
     evaluacion_promos = []
     for pr in promos:
         prod_match = next((it for it in inventario if it["nombre"].lower() == pr["producto"].lower()), None)
-        tomas_p = prod_match["tomas"] if prod_match else 12
-        dev_p = prod_match["devueltos"] if prod_match else 2
+        tomas_p = prod_match["tomas"] if prod_match else 0
+        dev_p = prod_match["devueltos"] if prod_match else 0
+        nivel_p = (prod_match["nivel"] if prod_match else "").lower()
         netos_p = max(0, tomas_p - dev_p)
-        retencion_pct = round((netos_p / max(1, tomas_p)) * 100.0, 1)
+        retencion_pct = round((netos_p / max(1, tomas_p)) * 100.0, 1) if tomas_p > 0 else 0.0
+        ratio_dev = (dev_p / tomas_p) if tomas_p > 0 else 0.0
 
-        if pr["percha_id"] == "PER-A1" or dev_p >= 4:
-            diagnostico = "Capta la mirada (giro de cabeza alto), pero sufre sustitución de último momento tras comparar precio/competidor."
+        if dev_p >= 3 and ratio_dev >= 0.22:
+            diagnostico = "Capta la atención inicial, pero presenta devoluciones de último momento por precio o comparación con el competidor."
             estado_efecto = "Fricción de Precio / Sustitución"
-        elif pr["percha_id"] == "PER-C1":
-            diagnostico = "Ubicada en nivel inferior (requiere agacharse). Baja visibilidad espontánea; subir al nivel de los ojos aumentaría +35% las tomas."
+        elif "inferior" in nivel_p or tomas_p < 5:
+            diagnostico = "Baja visibilidad en el rango consultado (zona fría o nivel inferior). Conviene reubicar a altura de los ojos o reforzar stopper."
             estado_efecto = "Baja Visibilidad (Zona Fría)"
         else:
-            diagnostico = "Alta atracción visual y cierre efectivo: los clientes giran la cabeza al cartel POP y compran en < 5 segundos."
+            diagnostico = "Atracción visual consistente y cierre efectivo en percha dentro del período analizado."
             estado_efecto = "Alta Conversión POP"
 
         evaluacion_promos.append({
@@ -975,8 +972,8 @@ def obtener_resumen_ejecutivo_publicidad(dias: int = 30, fecha_inicio: str = Non
     return {
         "privacidad": {
             "modo": "Anonimización Coordenadas 2D Activa (Cero Biometría / GDPR & LOPDP)",
-            "clientes_validados_puerta_caja": max(1, int(clientes_validados)),
-            "empleados_excluidos": max(1, int(empleados_excluidos))
+            "clientes_validados_puerta_caja": clientes_validados,
+            "empleados_excluidos": empleados_excluidos
         },
         "comportamiento_visual": comp_map,
         "postura_cabeza": postura_map,
@@ -1024,7 +1021,7 @@ def obtener_serie_temporal_periodo(agrupacion: str = "dia", dias: int = 30, fech
         "agrupacion": agrupacion,
         "labels": [r[0] for r in filas if r[0]],
         "trafico": trafico_list,
-        "interacciones": trafico_list,
+        "interacciones": tomados_list,
         "tomados": tomados_list,
         "llevados": tomados_list,
         "devueltos": devueltos_list,
@@ -1052,51 +1049,50 @@ def obtener_heatmap_dia_hora(dias=30, fecha_inicio: str = None, fecha_fin: str =
     """, params_ev)
 
 
-# --- Interacciones agrupadas por hora y producto ---
 def obtener_interacciones_por_hora(dias=7, fecha_inicio: str = None, fecha_fin: str = None):
     where_ev, params_ev = _construir_filtro_fecha(dias, fecha_inicio, fecha_fin, "creado")
     return leer(f"""
         SELECT strftime('%H', creado) as hora, detalle as producto, COUNT(*) as total
-        FROM eventos WHERE tipo = 'interaccion' AND {where_ev}
+        FROM eventos WHERE tipo IN ('producto_tomado', 'interaccion') AND {where_ev}
         GROUP BY hora, producto ORDER BY hora, total DESC
     """, params_ev)
 
 
-# --- Top productos por cantidad de interacciones ---
 def obtener_top_productos(limite=10, dias=30, fecha_inicio: str = None, fecha_fin: str = None):
     where_ev, params_ev = _construir_filtro_fecha(dias, fecha_inicio, fecha_fin, "creado")
     return leer(f"""
         SELECT detalle as producto, COUNT(*) as interacciones
-        FROM eventos WHERE tipo = 'interaccion' AND {where_ev}
+        FROM eventos WHERE tipo IN ('producto_tomado', 'interaccion') AND {where_ev}
         GROUP BY producto ORDER BY interacciones DESC LIMIT ?
     """, (*params_ev, limite))
 
 
-# --- Búsqueda de productos por nombre parcial ---
 def buscar_productos(termino):
+    limpio = str(termino or "").replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
     return leer("""
         SELECT detalle as producto, COUNT(*) as interacciones
-        FROM eventos WHERE tipo = 'interaccion' AND LOWER(detalle) LIKE LOWER(?)
-        GROUP BY producto ORDER BY interacciones DESC
-    """, (f"%{termino}%",))
+        FROM eventos
+        WHERE tipo IN ('producto_tomado', 'interaccion')
+          AND LOWER(detalle) LIKE LOWER(?) ESCAPE '\\'
+        GROUP BY producto ORDER BY interacciones DESC LIMIT 50
+    """, (f"%{limpio}%",))
 
 
-# --- Categorías con productos y conteo ---
-def obtener_categorias_con_productos():
-    return leer("""
+def obtener_categorias_con_productos(dias=90):
+    where_ev, params_ev = _construir_filtro_fecha(dias, None, None, "creado")
+    return leer(f"""
         SELECT c.nombre as categoria, pc.producto,
                COALESCE(cnt.total, 0) as interacciones
         FROM categorias c
         LEFT JOIN producto_categoria pc ON c.id = pc.categoria_id
         LEFT JOIN (
             SELECT detalle, COUNT(*) as total
-            FROM eventos WHERE tipo = 'interaccion' GROUP BY detalle
+            FROM eventos WHERE tipo IN ('producto_tomado', 'interaccion') AND {where_ev} GROUP BY detalle
         ) cnt ON pc.producto = cnt.detalle
         ORDER BY c.nombre, interacciones DESC
-    """)
+    """, params_ev)
 
 
-# --- Estadísticas segmentadas por franja horaria ---
 def obtener_stats_por_franja(dias=7, fecha_inicio: str = None, fecha_fin: str = None):
     where_ev, params_ev = _construir_filtro_fecha(dias, fecha_inicio, fecha_fin, "creado")
     return leer(f"""
@@ -1106,15 +1102,14 @@ def obtener_stats_por_franja(dias=7, fecha_inicio: str = None, fecha_fin: str = 
                 WHEN CAST(strftime('%H', creado) AS INTEGER) BETWEEN 12 AND 17 THEN 'tarde'
                 ELSE 'noche'
             END as franja,
-            tipo,
+            CASE WHEN tipo = 'producto_tomado' THEN 'interaccion' ELSE tipo END as tipo,
             COUNT(*) as total,
             COALESCE(AVG(CASE WHEN tipo = 'permanencia' THEN valor END), 0) as prom
         FROM eventos WHERE {where_ev}
-        GROUP BY franja, tipo
+        GROUP BY franja, CASE WHEN tipo = 'producto_tomado' THEN 'interaccion' ELSE tipo END
     """, params_ev)
 
 
-# --- Productos más interactuados por franja ---
 def obtener_productos_por_franja(dias=7, fecha_inicio: str = None, fecha_fin: str = None):
     where_ev, params_ev = _construir_filtro_fecha(dias, fecha_inicio, fecha_fin, "creado")
     return leer(f"""
@@ -1126,12 +1121,11 @@ def obtener_productos_por_franja(dias=7, fecha_inicio: str = None, fecha_fin: st
             END as franja,
             detalle as producto, COUNT(*) as interacciones
         FROM eventos
-        WHERE tipo = 'interaccion' AND {where_ev}
+        WHERE tipo IN ('producto_tomado', 'interaccion') AND {where_ev}
         GROUP BY franja, producto ORDER BY franja, interacciones DESC
     """, params_ev)
 
 
-# --- Perfiles de comportamiento basados en permanencia ---
 def obtener_perfil_permanencia(dias=7, fecha_inicio: str = None, fecha_fin: str = None):
     where_ev, params_ev = _construir_filtro_fecha(dias, fecha_inicio, fecha_fin, "creado")
     return leer(f"""
@@ -1150,20 +1144,18 @@ def obtener_perfil_permanencia(dias=7, fecha_inicio: str = None, fecha_fin: str 
     """, params_ev)
 
 
-# --- Tendencia diaria (tráfico, interacciones, permanencia) ---
 def obtener_tendencia_diaria(dias=14, fecha_inicio: str = None, fecha_fin: str = None):
     where_ev, params_ev = _construir_filtro_fecha(dias, fecha_inicio, fecha_fin, "creado")
     return leer(f"""
         SELECT date(creado) as fecha,
-            SUM(CASE WHEN tipo = 'trafico'     THEN 1 ELSE 0 END) as trafico,
-            SUM(CASE WHEN tipo = 'interaccion'  THEN 1 ELSE 0 END) as interacciones,
+            SUM(CASE WHEN tipo = 'trafico' THEN 1 ELSE 0 END) as trafico,
+            SUM(CASE WHEN tipo IN ('producto_tomado', 'interaccion') THEN 1 ELSE 0 END) as interacciones,
             ROUND(AVG(CASE WHEN tipo = 'permanencia' THEN valor END), 1) as prom
         FROM eventos WHERE {where_ev}
         GROUP BY fecha ORDER BY fecha
     """, params_ev)
 
 
-# --- Datos cruzados para publicidad dinámica ---
 def obtener_datos_publicidad(franja=None, dias=7, fecha_inicio: str = None, fecha_fin: str = None):
     where_ev, params_ev = _construir_filtro_fecha(dias, fecha_inicio, fecha_fin, "creado")
     franja_sql = {
@@ -1173,22 +1165,21 @@ def obtener_datos_publicidad(franja=None, dias=7, fecha_inicio: str = None, fech
     }
     extra = franja_sql.get(franja, "")
 
-    trafico = leer(
-        f"SELECT COUNT(*) FROM eventos WHERE tipo = 'trafico' AND {where_ev} {extra}",
-        params_ev, uno=True
-    )[0]
-    perm = leer(
-        f"SELECT COALESCE(AVG(valor),0), COUNT(*) FROM eventos WHERE tipo = 'permanencia' AND {where_ev} {extra}",
-        params_ev, uno=True
-    )
+    resumen = leer(f"""
+        SELECT
+            COALESCE(SUM(CASE WHEN tipo = 'trafico' THEN 1 ELSE 0 END), 0),
+            COALESCE(AVG(CASE WHEN tipo = 'permanencia' THEN valor END), 0),
+            COALESCE(SUM(CASE WHEN tipo = 'permanencia' THEN 1 ELSE 0 END), 0)
+        FROM eventos WHERE {where_ev} {extra}
+    """, params_ev, uno=True) or (0, 0, 0)
     top = leer(
-        f"SELECT detalle, COUNT(*) FROM eventos WHERE tipo = 'interaccion' AND {where_ev} {extra} GROUP BY detalle ORDER BY COUNT(*) DESC LIMIT 5",
+        f"SELECT detalle, COUNT(*) FROM eventos WHERE tipo IN ('producto_tomado', 'interaccion') AND {where_ev} {extra} GROUP BY detalle ORDER BY COUNT(*) DESC LIMIT 5",
         params_ev
     )
     return {
-        "trafico": trafico,
-        "permanencia_promedio": round(float(perm[0]), 1),
-        "permanencia_eventos": perm[1],
+        "trafico": int(resumen[0] or 0),
+        "permanencia_promedio": round(float(resumen[1] or 0), 1),
+        "permanencia_eventos": int(resumen[2] or 0),
         "top_productos": [{"producto": p[0], "interacciones": p[1]} for p in top] if top else [],
         "franja": franja or "todas"
     }

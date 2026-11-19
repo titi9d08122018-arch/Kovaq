@@ -1,59 +1,61 @@
-"""
-analytics.py — Router de Analítica Avanzada, Series Temporales (Día/Semana/Mes) y Mapeo Topológico.
-Módulos: Heatmaps, Series Históricas, Categorías, Horarios/Perfiles, Publicidad Dinámica, Mapa 2D, Perchas e Inventario.
-Se monta en /api/analytics y no altera ningún endpoint existente.
-"""
+"""Router de analítica avanzada, series temporales y resumen ejecutivo de publicidad."""
 import asyncio
 
-from fastapi import APIRouter, Request, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 
-from database import (
-    obtener_heatmap_hora, obtener_heatmap_dia_hora,
-    obtener_interacciones_por_hora, obtener_top_productos,
-    buscar_productos, obtener_categorias_con_productos,
-    obtener_stats_por_franja, obtener_productos_por_franja,
-    obtener_perfil_permanencia, obtener_tendencia_diaria,
-    obtener_datos_publicidad, obtener_inventario_real,
-    obtener_camaras_mapa, obtener_perchas_mapa,
-    obtener_resumen_ejecutivo_publicidad, obtener_promociones_percha,
-    obtener_serie_temporal_periodo
-)
 from ai_agent import KovaqMarketingAnalyticsEngine
+from auth import obtener_usuario_actual
+from database import (
+    buscar_productos,
+    obtener_categorias_con_productos,
+    obtener_datos_publicidad,
+    obtener_heatmap_dia_hora,
+    obtener_heatmap_hora,
+    obtener_interacciones_por_hora,
+    obtener_inventario_real,
+    obtener_perfil_permanencia,
+    obtener_productos_por_franja,
+    obtener_resumen_ejecutivo_publicidad,
+    obtener_serie_temporal_periodo,
+    obtener_stats_por_franja,
+    obtener_tendencia_diaria,
+    obtener_top_productos,
+)
 
 router = APIRouter(prefix="/api/analytics", tags=["analytics"])
+_FECHA_PAT = r"^\d{4}-\d{2}-\d{2}$"
 
 
-async def _auth(request: Request):
-    from main import obtener_usuario_actual
-    return await obtener_usuario_actual(request)
+async def _ejecutar_consulta(fn, *args):
+    try:
+        return await asyncio.to_thread(fn, *args)
+    except ValueError as err:
+        raise HTTPException(status_code=400, detail=str(err))
 
 
-# ==========================================
-# 1. HEATMAPS Y SERIES TEMPORALES (DÍA / SEMANA / MES / RANGO PERSONALIZADO)
-# ==========================================
+# Heatmaps y series temporales
+
 @router.get("/serie_temporal")
 async def serie_temporal(
     request: Request,
     agrupacion: str = Query("dia", pattern="^(dia|semana|mes)$"),
     dias: int = Query(30, ge=1, le=365),
-    fecha_inicio: str = Query(None),
-    fecha_fin: str = Query(None),
+    fecha_inicio: str | None = Query(None, pattern=_FECHA_PAT),
+    fecha_fin: str | None = Query(None, pattern=_FECHA_PAT),
 ):
-    """Devuelve la evolución histórica desde Turso agrupada por día, semana o mes."""
-    await _auth(request)
-    return await asyncio.to_thread(obtener_serie_temporal_periodo, agrupacion, dias, fecha_inicio, fecha_fin)
+    await obtener_usuario_actual(request)
+    return await _ejecutar_consulta(obtener_serie_temporal_periodo, agrupacion, dias, fecha_inicio, fecha_fin)
 
 
 @router.get("/heatmap/hora")
 async def heatmap_hora(
     request: Request,
     dias: int = Query(7, ge=1, le=365),
-    fecha_inicio: str = Query(None),
-    fecha_fin: str = Query(None),
+    fecha_inicio: str | None = Query(None, pattern=_FECHA_PAT),
+    fecha_fin: str | None = Query(None, pattern=_FECHA_PAT),
 ):
-    """Tráfico total por hora del día (0-23). Llena huecos con cero."""
-    await _auth(request)
-    data = await asyncio.to_thread(obtener_heatmap_hora, dias, fecha_inicio, fecha_fin)
+    await obtener_usuario_actual(request)
+    data = await _ejecutar_consulta(obtener_heatmap_hora, dias, fecha_inicio, fecha_fin)
     horas = {str(i).zfill(2): 0 for i in range(24)}
     for row in data:
         if row[0] is not None:
@@ -65,12 +67,11 @@ async def heatmap_hora(
 async def heatmap_matriz(
     request: Request,
     dias: int = Query(30, ge=1, le=365),
-    fecha_inicio: str = Query(None),
-    fecha_fin: str = Query(None),
+    fecha_inicio: str | None = Query(None, pattern=_FECHA_PAT),
+    fecha_fin: str | None = Query(None, pattern=_FECHA_PAT),
 ):
-    """Matriz 7 días × 24 horas de tráfico con métricas ejecutivas e intuitivas."""
-    await _auth(request)
-    data = await asyncio.to_thread(obtener_heatmap_dia_hora, dias, fecha_inicio, fecha_fin)
+    await obtener_usuario_actual(request)
+    data = await _ejecutar_consulta(obtener_heatmap_dia_hora, dias, fecha_inicio, fecha_fin)
     matriz = [[0] * 24 for _ in range(7)]
     nombres_dias = ["Dom", "Lun", "Mar", "Mié", "Jue", "Vie", "Sáb"]
 
@@ -109,19 +110,18 @@ async def heatmap_matriz(
             "tarde": t_val,
             "noche": n_val,
             "madrugada": mad_val,
-            "total": tot_dia
+            "total": tot_dia,
         })
 
     max_dia_idx = max(range(7), key=lambda i: totales_dia[i]) if totales_dia else 0
     dia_pico = {
         "dia": nombres_dias[max_dia_idx],
-        "total": totales_dia[max_dia_idx] if totales_dia else 0
+        "total": totales_dia[max_dia_idx] if totales_dia else 0,
     }
-
     hora_pico = {
-        "hora": max_hora_txt or "16:00",
-        "dia": max_hora_dia or "Miércoles",
-        "total": max_hora_val if max_hora_val >= 0 else 0
+        "hora": max_hora_txt or "00:00",
+        "dia": max_hora_dia or "Sin datos",
+        "total": max_hora_val if max_hora_val >= 0 else 0,
     }
 
     return {
@@ -131,7 +131,7 @@ async def heatmap_matriz(
         "total_semanal": total_semanal,
         "dia_pico": dia_pico,
         "hora_pico": hora_pico,
-        "resumen_franjas": resumen_franjas
+        "resumen_franjas": resumen_franjas,
     }
 
 
@@ -139,31 +139,28 @@ async def heatmap_matriz(
 async def heatmap_interacciones(
     request: Request,
     dias: int = Query(7, ge=1, le=365),
-    fecha_inicio: str = Query(None),
-    fecha_fin: str = Query(None),
+    fecha_inicio: str | None = Query(None, pattern=_FECHA_PAT),
+    fecha_fin: str | None = Query(None, pattern=_FECHA_PAT),
 ):
-    """Interacciones con productos agrupadas por hora."""
-    await _auth(request)
-    data = await asyncio.to_thread(obtener_interacciones_por_hora, dias, fecha_inicio, fecha_fin)
+    await obtener_usuario_actual(request)
+    data = await _ejecutar_consulta(obtener_interacciones_por_hora, dias, fecha_inicio, fecha_fin)
     resultado = {}
     for hora, producto, total in data:
         resultado.setdefault(hora, []).append({"producto": producto, "total": total})
     return resultado
 
 
-# ==========================================
-# 2. CATEGORÍAS, INVENTARIO, BÚSQUEDA Y TOP
-# ==========================================
+# Categorías, inventario y búsqueda
+
 @router.get("/inventario")
 async def inventario(
     request: Request,
     dias: int = Query(30, ge=1, le=365),
-    fecha_inicio: str = Query(None),
-    fecha_fin: str = Query(None),
+    fecha_inicio: str | None = Query(None, pattern=_FECHA_PAT),
+    fecha_fin: str | None = Query(None, pattern=_FECHA_PAT),
 ):
-    """Catálogo de productos con ubicación de percha, stock e interacciones reales del período."""
-    await _auth(request)
-    items = await asyncio.to_thread(obtener_inventario_real, dias, fecha_inicio, fecha_fin)
+    await obtener_usuario_actual(request)
+    items = await _ejecutar_consulta(obtener_inventario_real, dias, fecha_inicio, fecha_fin)
     return {"productos": items}
 
 
@@ -172,24 +169,24 @@ async def top_productos(
     request: Request,
     limite: int = Query(10, ge=1, le=50),
     dias: int = Query(30, ge=1, le=365),
-    fecha_inicio: str = Query(None),
-    fecha_fin: str = Query(None),
+    fecha_inicio: str | None = Query(None, pattern=_FECHA_PAT),
+    fecha_fin: str | None = Query(None, pattern=_FECHA_PAT),
 ):
-    await _auth(request)
-    data = await asyncio.to_thread(obtener_top_productos, limite, dias, fecha_inicio, fecha_fin)
+    await obtener_usuario_actual(request)
+    data = await _ejecutar_consulta(obtener_top_productos, limite, dias, fecha_inicio, fecha_fin)
     return {"productos": [{"nombre": p[0], "interacciones": p[1]} for p in data]}
 
 
 @router.get("/productos/buscar")
-async def buscar(request: Request, q: str = Query(..., min_length=1)):
-    await _auth(request)
+async def buscar(request: Request, q: str = Query(..., min_length=1, max_length=100)):
+    await obtener_usuario_actual(request)
     data = await asyncio.to_thread(buscar_productos, q)
     return {"resultados": [{"nombre": p[0], "interacciones": p[1]} for p in data]}
 
 
 @router.get("/categorias")
 async def categorias(request: Request):
-    await _auth(request)
+    await obtener_usuario_actual(request)
     data = await asyncio.to_thread(obtener_categorias_con_productos)
     cats = {}
     for cat, prod, inter in data:
@@ -197,23 +194,21 @@ async def categorias(request: Request):
     return {"categorias": cats}
 
 
-# ==========================================
-# 3. HORARIOS Y PERFILES
-# ==========================================
+# Horarios y perfiles de permanencia
+
 @router.get("/horarios/franjas")
 async def stats_franjas(
     request: Request,
     dias: int = Query(7, ge=1, le=365),
-    fecha_inicio: str = Query(None),
-    fecha_fin: str = Query(None),
+    fecha_inicio: str | None = Query(None, pattern=_FECHA_PAT),
+    fecha_fin: str | None = Query(None, pattern=_FECHA_PAT),
 ):
-    """KPIs por franja: mañana (6-12), tarde (12-18), noche (18-6) + porcentajes para gráfico Donut."""
-    await _auth(request)
-    data = await asyncio.to_thread(obtener_stats_por_franja, dias, fecha_inicio, fecha_fin)
+    await obtener_usuario_actual(request)
+    data = await _ejecutar_consulta(obtener_stats_por_franja, dias, fecha_inicio, fecha_fin)
     franjas = {
         "manana": {"trafico": 0, "interacciones": 0, "permanencia": 0.0, "conversion": 0.0},
-        "tarde":  {"trafico": 0, "interacciones": 0, "permanencia": 0.0, "conversion": 0.0},
-        "noche":  {"trafico": 0, "interacciones": 0, "permanencia": 0.0, "conversion": 0.0},
+        "tarde": {"trafico": 0, "interacciones": 0, "permanencia": 0.0, "conversion": 0.0},
+        "noche": {"trafico": 0, "interacciones": 0, "permanencia": 0.0, "conversion": 0.0},
     }
     for franja, tipo, total, prom in data:
         if franja not in franjas:
@@ -226,7 +221,7 @@ async def stats_franjas(
             franjas[franja]["permanencia"] = round(float(prom), 1)
 
     total_trafico = sum(v["trafico"] for v in franjas.values())
-    for k, v in franjas.items():
+    for v in franjas.values():
         v["conversion"] = round((v["interacciones"] / v["trafico"]) * 100.0, 1) if v["trafico"] > 0 else 0.0
 
     if total_trafico > 0:
@@ -236,7 +231,7 @@ async def stats_franjas(
             "Noche": round((franjas["noche"]["trafico"] / total_trafico) * 100, 1),
         }
     else:
-        porcentajes = {"Mañana": 30, "Tarde": 45, "Noche": 25}
+        porcentajes = {"Mañana": 0.0, "Tarde": 0.0, "Noche": 0.0}
 
     franjas["porcentajes"] = porcentajes
     return franjas
@@ -246,11 +241,11 @@ async def stats_franjas(
 async def productos_por_franja(
     request: Request,
     dias: int = Query(7, ge=1, le=365),
-    fecha_inicio: str = Query(None),
-    fecha_fin: str = Query(None),
+    fecha_inicio: str | None = Query(None, pattern=_FECHA_PAT),
+    fecha_fin: str | None = Query(None, pattern=_FECHA_PAT),
 ):
-    await _auth(request)
-    data = await asyncio.to_thread(obtener_productos_por_franja, dias, fecha_inicio, fecha_fin)
+    await obtener_usuario_actual(request)
+    data = await _ejecutar_consulta(obtener_productos_por_franja, dias, fecha_inicio, fecha_fin)
     resultado = {"manana": [], "tarde": [], "noche": []}
     for franja, producto, interacciones in data:
         if franja in resultado:
@@ -262,12 +257,11 @@ async def productos_por_franja(
 async def perfiles(
     request: Request,
     dias: int = Query(7, ge=1, le=365),
-    fecha_inicio: str = Query(None),
-    fecha_fin: str = Query(None),
+    fecha_inicio: str | None = Query(None, pattern=_FECHA_PAT),
+    fecha_fin: str | None = Query(None, pattern=_FECHA_PAT),
 ):
-    """Segmentación de clientes por tiempo de permanencia."""
-    await _auth(request)
-    data = await asyncio.to_thread(obtener_perfil_permanencia, dias, fecha_inicio, fecha_fin)
+    await obtener_usuario_actual(request)
+    data = await _ejecutar_consulta(obtener_perfil_permanencia, dias, fecha_inicio, fecha_fin)
     return {"perfiles": [{"tipo": p[0], "cantidad": p[1], "promedio_seg": p[2]} for p in data]}
 
 
@@ -275,12 +269,11 @@ async def perfiles(
 async def tendencia(
     request: Request,
     dias: int = Query(14, ge=1, le=365),
-    fecha_inicio: str = Query(None),
-    fecha_fin: str = Query(None),
+    fecha_inicio: str | None = Query(None, pattern=_FECHA_PAT),
+    fecha_fin: str | None = Query(None, pattern=_FECHA_PAT),
 ):
-    """Tendencia diaria de métricas principales."""
-    await _auth(request)
-    data = await asyncio.to_thread(obtener_tendencia_diaria, dias, fecha_inicio, fecha_fin)
+    await obtener_usuario_actual(request)
+    data = await _ejecutar_consulta(obtener_tendencia_diaria, dias, fecha_inicio, fecha_fin)
     return {
         "fechas": [r[0] for r in data],
         "trafico": [r[1] for r in data],
@@ -289,20 +282,18 @@ async def tendencia(
     }
 
 
-# ==========================================
-# 4. PUBLICIDAD DINÁMICA Y RESUMEN EJECUTIVO POR PERÍODO
-# ==========================================
+# Publicidad dinámica y resumen ejecutivo
+
 @router.get("/publicidad")
 async def publicidad(
     request: Request,
-    franja: str = Query(None, pattern="^(manana|tarde|noche)$"),
+    franja: str | None = Query(None, pattern="^(manana|tarde|noche)$"),
     dias: int = Query(7, ge=1, le=365),
-    fecha_inicio: str = Query(None),
-    fecha_fin: str = Query(None),
+    fecha_inicio: str | None = Query(None, pattern=_FECHA_PAT),
+    fecha_fin: str | None = Query(None, pattern=_FECHA_PAT),
 ):
-    """Datos cruzados + sugerencias automáticas de pauta por franja horaria."""
-    await _auth(request)
-    data = await asyncio.to_thread(obtener_datos_publicidad, franja, dias, fecha_inicio, fecha_fin)
+    await obtener_usuario_actual(request)
+    data = await _ejecutar_consulta(obtener_datos_publicidad, franja, dias, fecha_inicio, fecha_fin)
 
     sugerencias = []
     if data["trafico"] > 0:
@@ -319,8 +310,8 @@ async def publicidad(
                 "icono": "bi-exclamation-triangle-fill",
                 "titulo": f"Baja conversión en {nombre_franja}",
                 "descripcion": (
-                    f"Solo {tasa:.1f}% de conversión. "
-                    "Sugerimos Reels cortos (<15 s) geolocalizados a 2 km del supermercado."
+                    f"Conversión de {tasa:.1f}%. "
+                    "Conviene probar Reels cortos (<15 s) geolocalizados a 2 km del local."
                 ),
                 "presupuesto": "$40-80 USD / 2 semanas",
             })
@@ -331,8 +322,8 @@ async def publicidad(
                 "icono": "bi-lightbulb-fill",
                 "titulo": "Alta permanencia, baja conversión",
                 "descripcion": (
-                    f"Clientes permanecen {data['permanencia_promedio']}s pero no interactúan. "
-                    "Cupón digital o promo en punto de venta."
+                    f"Clientes permanecen {data['permanencia_promedio']}s sin concretar toma. "
+                    "Evaluar cupón digital o ajuste de señalización en punto de venta."
                 ),
                 "presupuesto": "$30-60 USD / semana",
             })
@@ -344,7 +335,7 @@ async def publicidad(
                 "titulo": f"Potenciar: {prod['producto']}",
                 "descripcion": (
                     f"{prod['interacciones']} interacciones registradas en {nombre_franja}. "
-                    "Alto interés — ideal para campaña de Meta Ads con foto de percha."
+                    "Alto interés: candidato para campaña de Meta Ads con foto de percha."
                 ),
                 "presupuesto": "$25-50 USD / semana",
             })
@@ -355,8 +346,8 @@ async def publicidad(
                 "icono": "bi-clock-history",
                 "titulo": "Tránsito rápido sin detención",
                 "descripcion": (
-                    "Los clientes pasan pero no se detienen. "
-                    "Evaluar señalización, iluminación o reubicación de productos estrella."
+                    "Los clientes pasan sin detenerse. "
+                    "Revisar señalización, iluminación o altura de productos estrella."
                 ),
                 "presupuesto": "Inversión en PDV",
             })
@@ -369,14 +360,10 @@ async def publicidad(
 async def resumen_publicidad_ejecutivo(
     request: Request,
     dias: int = Query(30, ge=1, le=365),
-    fecha_inicio: str = Query(None),
-    fecha_fin: str = Query(None),
+    fecha_inicio: str | None = Query(None, pattern=_FECHA_PAT),
+    fecha_fin: str | None = Query(None, pattern=_FECHA_PAT),
 ):
-    """
-    Entrega el Dashboard Ejecutivo de Publicidad en Punto de Venta filtrado por Día, Semana, Mes o Rango de Fechas.
-    """
-    await _auth(request)
-    exec_data = await asyncio.to_thread(obtener_resumen_ejecutivo_publicidad, dias, fecha_inicio, fecha_fin)
-    diag = await asyncio.to_thread(KovaqMarketingAnalyticsEngine.generar_diagnostico_integral, exec_data)
-    exec_data["motor_marketing_ai"] = diag
+    await obtener_usuario_actual(request)
+    exec_data = await _ejecutar_consulta(obtener_resumen_ejecutivo_publicidad, dias, fecha_inicio, fecha_fin)
+    exec_data["motor_marketing_ai"] = KovaqMarketingAnalyticsEngine.generar_diagnostico_integral(exec_data)
     return exec_data
