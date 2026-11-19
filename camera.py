@@ -33,6 +33,8 @@ if not _ES_NUBE:
         pass
 
 from database import (
+    POLY_PER_A1,
+    POLY_PER_A2,
     guardar_interaccion,
     guardar_permanencia,
     guardar_trafico,
@@ -41,7 +43,9 @@ from database import (
     guardar_handoff_camara,
     guardar_telemetria_coordenada,
     obtener_camaras_mapa,
-    obtener_perchas_mapa
+    obtener_mapa_calor_espacial,
+    obtener_perchas_mapa,
+    obtener_sucursales,
 )
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -939,11 +943,22 @@ class CameraService:
             "empleados_excluidos": self.total_empleados_excluidos
         }
 
-    def obtener_estado_mapa_2d(self):
+    def obtener_estado_mapa_2d(
+        self,
+        sucursal_id: str = None,
+        dias: int = 30,
+        horas: int = None,
+        fecha_inicio: str = None,
+        fecha_fin: str = None,
+        hora_inicio: int = None,
+        hora_fin: int = None,
+    ):
         if not self.perchas_config or not self.camaras_lista_cache:
             self.recargar_mapa_tienda()
         ahora = time.time()
         personas_mapa = []
+        suc_activa = (sucursal_id or "SUC-NORTE").strip()
+        suc_filtro = None if suc_activa.lower() == "todas" else suc_activa
 
         with self.mtmc.lock:
             for gid, tr in list(self.mtmc.global_tracks.items()):
@@ -954,7 +969,7 @@ class CameraService:
                         "global_id": gid,
                         "etiqueta": f"S#{gid}" if es_cli else f"STAFF#{gid}",
                         "es_cliente_valido": es_cli,
-                        "rol_traza": tr.get("rol_traza", "Cliente (Puerta → Caja)"),
+                        "rol_traza": tr.get("rol_traza", "Cliente (Puerta -> Caja)"),
                         "postura_cabeza": tr.get("postura_cabeza", "Frente (Pasillo)"),
                         "camara_actual": tr["camara_actual"],
                         "camaras_visitadas": list(tr["camaras_visitadas"]),
@@ -991,26 +1006,56 @@ class CameraService:
                     })
 
             handoffs_lista = list(self.mtmc.handoffs)
-            grid_copy = [ list(fila) for fila in self.mtmc.heatmap_grid ]
+
+        # Datos históricos del período y sucursal seleccionados (enlazados a horas/días/semanas/meses)
+        sucursales_db = obtener_sucursales()
+        suc_obj = next((s for s in sucursales_db if s["id"] == suc_filtro), sucursales_db[0] if sucursales_db else None)
+        plano_arq = (suc_obj or {}).get("plano") or {
+            "nombre_plano": "Planta Baja Comercial",
+            "dimensiones_m": [42, 24],
+            "bodega": {"x": 0.03, "y": 0.04, "w": 0.94, "h": 0.11, "label": "BODEGA / PERSONAL"},
+            "puerta_entrada": {"x": 0.02, "y": 0.30, "w": 0.055, "h": 0.40, "nombre": "ACCESO PRINCIPAL"},
+            "linea_cajas": {"x": 0.86, "y": 0.50, "w": 0.105, "h": 0.42, "nombre": "LÍNEA DE CAJAS", "cajas": 4},
+            "columnas": [[0.38, 0.48], [0.68, 0.48]],
+            "pasillos": [],
+            "cabeceras": [],
+        }
+
+        camaras_suc = obtener_camaras_mapa(sucursal_id=suc_filtro or "SUC-NORTE")
+        perchas_suc = obtener_perchas_mapa(
+            dias=dias, fecha_inicio=fecha_inicio, fecha_fin=fecha_fin,
+            horas=horas, hora_inicio=hora_inicio, hora_fin=hora_fin,
+            sucursal_id=suc_filtro or "SUC-NORTE",
+        )
+        calor_espacial = obtener_mapa_calor_espacial(
+            dias=dias, fecha_inicio=fecha_inicio, fecha_fin=fecha_fin,
+            horas=horas, hora_inicio=hora_inicio, hora_fin=hora_fin,
+            sucursal_id=suc_filtro,
+        )
 
         clientes_validos_activos = sum(1 for p in personas_mapa if p.get("es_cliente_valido", True))
 
-        with self.lock:
-            camaras_copia = list(self.camaras_lista_cache)
-            perchas_copia = list(self.perchas_config)
-
         return {
+            "sucursal_id": suc_obj["id"] if suc_obj else "SUC-NORTE",
+            "sucursal_nombre": suc_obj["nombre"] if suc_obj else "Matriz Norte",
             "camara_activa": self.camara_activa_id,
             "simulacion_activa": self.mtmc.simulacion_activa,
             "privacidad_modo": "Coordenadas Anónimas 2D (Cero Identificación Personal / Staff Excluido)",
+            "plano_arquitectura": plano_arq,
             "zonas_arquitectura": {
-                "puerta_entrada": {"x": 0.02, "y": 0.25, "w": 0.06, "h": 0.50, "nombre": "PUERTA ENTRADA"},
-                "linea_cajas": {"x": 0.88, "y": 0.56, "w": 0.09, "h": 0.34, "nombre": "CAJAS / SALIDA"}
+                "puerta_entrada": plano_arq.get("puerta_entrada", {"x": 0.02, "y": 0.25, "w": 0.06, "h": 0.50, "nombre": "PUERTA ENTRADA"}),
+                "linea_cajas": plano_arq.get("linea_cajas", {"x": 0.88, "y": 0.56, "w": 0.09, "h": 0.34, "nombre": "CAJAS / SALIDA"}),
             },
-            "heatmap_grid": grid_copy,
+            "heatmap_grid": calor_espacial["grid"],
+            "heatmap_meta": {
+                "cols": calor_espacial["cols"],
+                "rows": calor_espacial["rows"],
+                "max_intensidad": calor_espacial["max_intensidad"],
+                "total_muestras": calor_espacial["total_muestras"],
+            },
             "analisis_video_10s": self.analisis_video_10s,
-            "camaras": camaras_copia,
-            "perchas": perchas_copia,
+            "camaras": camaras_suc,
+            "perchas": perchas_suc,
             "personas": personas_mapa,
             "handoffs": handoffs_lista,
             "metricas": {
@@ -1528,11 +1573,27 @@ class CameraService:
             sy1 = int(float(roi.get("y1", 0.15)) * ALTO)
             sx2 = int(float(roi.get("x2", 0.48)) * ANCHO)
             sy2 = int(float(roi.get("y2", 0.82)) * ALTO)
+            poly_norm = roi.get("poly")
+            if not poly_norm:
+                if p.get("id") == "PER-A1":
+                    poly_norm = POLY_PER_A1
+                elif p.get("id") == "PER-A2":
+                    poly_norm = POLY_PER_A2
+                else:
+                    poly_norm = [
+                        [float(roi.get("x1", 0.12)), float(roi.get("y1", 0.15))],
+                        [float(roi.get("x2", 0.48)), float(roi.get("y1", 0.15))],
+                        [float(roi.get("x2", 0.48)), float(roi.get("y2", 0.82))],
+                        [float(roi.get("x1", 0.12)), float(roi.get("y2", 0.82))],
+                    ]
+            poly_px = [[int(pt[0] * ANCHO), int(pt[1] * ALTO)] for pt in poly_norm]
             perchas_overlay.append({
                 "id": p["id"],
                 "nombre": p["nombre"],
                 "categoria": p.get("categoria", "General"),
                 "box": [sx1, sy1, sx2, sy2],
+                "poly": poly_px,
+                "poly_norm": poly_norm,
                 "roi_norm": roi,
                 "niveles": p.get("niveles", []),
                 "color": p.get("color", "#FE5000")
@@ -1827,14 +1888,30 @@ class CameraService:
 
         canvas = raw.copy()
         if self.dibujar_hud and overlay:
+            tint = canvas.copy()
             for po in overlay.get("perchas", []):
-                sx1, sy1, sx2, sy2 = po["box"]
-                cv2.rectangle(canvas, (sx1, sy1), (sx2, sy2), (0, 80, 254), 1)
-                cv2.rectangle(canvas, (sx1, max(0, sy1 - 18)), (min(ANCHO, sx1 + 155), sy1), (64, 35, 12), -1)
-                cv2.putText(
-                    canvas, f"{po['id']}: {po['categoria']}", (sx1 + 4, max(12, sy1 - 5)),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.38, (255, 255, 255), 1, cv2.LINE_AA
-                )
+                poly = po.get("poly")
+                col_bgr = (0, 80, 254) if po.get("color", "#FE5000").upper() == "#FE5000" else (11, 158, 245)
+                if poly and len(poly) >= 3:
+                    pts = np.array(poly, dtype=np.int32)
+                    cv2.fillPoly(tint, [pts], col_bgr)
+                    cv2.polylines(canvas, [pts], True, col_bgr, 2, cv2.LINE_AA)
+                    lx = min(ANCHO - 145, max(4, int(poly[0][0]) + 4))
+                    ly = max(18, int(poly[0][1]) + 16)
+                    cv2.rectangle(canvas, (lx - 2, ly - 13), (min(ANCHO, lx + 138), ly + 4), (64, 35, 12), -1)
+                    cv2.putText(
+                        canvas, f"{po['id']}: {po['categoria']}", (lx + 2, ly),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.36, (255, 255, 255), 1, cv2.LINE_AA
+                    )
+                else:
+                    sx1, sy1, sx2, sy2 = po["box"]
+                    cv2.rectangle(canvas, (sx1, sy1), (sx2, sy2), col_bgr, 1)
+                    cv2.rectangle(canvas, (sx1, max(0, sy1 - 18)), (min(ANCHO, sx1 + 155), sy1), (64, 35, 12), -1)
+                    cv2.putText(
+                        canvas, f"{po['id']}: {po['categoria']}", (sx1 + 4, max(12, sy1 - 5)),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.38, (255, 255, 255), 1, cv2.LINE_AA
+                    )
+            cv2.addWeighted(tint, 0.16, canvas, 0.84, 0, canvas)
 
             for pers in overlay.get("personas", []):
                 x1, y1, x2, y2 = pers["box"]

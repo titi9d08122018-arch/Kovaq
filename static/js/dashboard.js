@@ -1,11 +1,22 @@
 (function () {
     "use strict";
 
-    // Estado global del dashboard
+    // Estado global del dashboard (enlazado a sucursal, horas, días, semanas, meses)
     let moduloActivo = "tab-vivo";
-    let filtroTemporal = { agrupacion: "semana", dias: 30, fecha_inicio: "", fecha_fin: "" };
+    let filtroTemporal = {
+        sucursal_id: "SUC-NORTE",
+        agrupacion: "semana",
+        dias: 30,
+        horas: null,
+        fecha_inicio: "",
+        fecha_fin: "",
+        hora_inicio: "",
+        hora_fin: "",
+    };
+    let capasMapa = { calor: true, fov: true, vectores: true };
     let modoVistaMatriz = "franjas";
     let datosMatrizGlobal = null;
+    let ultimoEstadoMapa = null;
     let categoriaActiva = "Todas";
     let lastSeenEventId = 0;
 
@@ -13,15 +24,66 @@
     let chartHeatmapHora = null;
     let chartFranjasDonut = null;
 
-    const enVuelo = { mapa: false, live: false, stats: false, pub: false, heat: false };
+    // Control de concurrencia sin descartar clics del usuario (AbortController por canal)
+    const controllers = { mapa: null, live: null, stats: null, pub: null, heat: null, inv: null };
+    const reqSeq = { mapa: 0, stats: 0, pub: 0, heat: 0, inv: 0 };
 
-    function escHtml(valor) {
-        return String(valor ?? "")
-            .replace(/&/g, "&amp;")
-            .replace(/</g, "&lt;")
-            .replace(/>/g, "&gt;")
-            .replace(/"/g, "&quot;")
-            .replace(/'/g, "&#39;");
+    // Datos reales de trackeo YOLOv8n cuadro a cuadro para el video demo
+    let demoTracks = null;
+    let liveVideoPersonas = [];
+    let liveTelemetriaBackend = null;
+    let rafHudId = null;
+
+    // Offscreen canvas y LUT térmico (azul frío -> cian -> amarillo -> naranja -> rojo caliente)
+    const heatOffscreen = document.createElement("canvas");
+    heatOffscreen.width = 480;
+    heatOffscreen.height = 240;
+    const heatLUT = construirLutTermico();
+
+    function construirLutTermico() {
+        const lut = new Uint8ClampedArray(256 * 4);
+        const stops = [
+            [0.0, 37, 99, 235, 0],
+            [0.18, 37, 99, 235, 115],
+            [0.42, 6, 182, 212, 155],
+            [0.65, 250, 204, 21, 185],
+            [0.84, 249, 115, 22, 215],
+            [1.0, 220, 38, 38, 235],
+        ];
+        for (let i = 0; i < 256; i++) {
+            const t = i / 255;
+            let s0 = stops[0];
+            let s1 = stops[stops.length - 1];
+            for (let k = 0; k < stops.length - 1; k++) {
+                if (t >= stops[k][0] && t <= stops[k + 1][0]) {
+                    s0 = stops[k];
+                    s1 = stops[k + 1];
+                    break;
+                }
+            }
+            const span = Math.max(0.0001, s1[0] - s0[0]);
+            const f = (t - s0[0]) / span;
+            lut[i * 4] = Math.round(s0[1] + (s1[1] - s0[1]) * f);
+            lut[i * 4 + 1] = Math.round(s0[2] + (s1[2] - s0[2]) * f);
+            lut[i * 4 + 2] = Math.round(s0[3] + (s1[3] - s0[3]) * f);
+            lut[i * 4 + 3] = Math.round(s0[4] + (s1[4] - s0[4]) * f);
+        }
+        return lut;
+    }
+
+    function fetchCancelable(canal, url) {
+        if (controllers[canal]) {
+            try {
+                controllers[canal].abort();
+            } catch (_e) {
+                // ignore
+            }
+        }
+        const ctrl = new AbortController();
+        controllers[canal] = ctrl;
+        reqSeq[canal] = (reqSeq[canal] || 0) + 1;
+        const mySeq = reqSeq[canal];
+        return fetch(url, { signal: ctrl.signal }).then((res) => ({ res, seq: mySeq }));
     }
 
     function mostrarAviso(bannerId, mensaje, tipo = "info") {
@@ -36,15 +98,35 @@
         el.textContent = mensaje;
     }
 
+    function marcarEstadoCarga(texto) {
+        const el = document.getElementById("indicador-carga-datos");
+        if (el) el.textContent = texto;
+    }
+
     function construirQueryTemporal(extra = {}) {
         const params = new URLSearchParams();
-        params.set("dias", String(filtroTemporal.dias || 30));
+        if (filtroTemporal.sucursal_id) {
+            params.set("sucursal_id", filtroTemporal.sucursal_id);
+        }
+        if (filtroTemporal.horas !== null && filtroTemporal.horas !== undefined && !filtroTemporal.fecha_inicio) {
+            params.set("horas", String(filtroTemporal.horas));
+        } else {
+            params.set("dias", String(filtroTemporal.dias || 30));
+        }
         if (filtroTemporal.fecha_inicio) params.set("fecha_inicio", filtroTemporal.fecha_inicio);
         if (filtroTemporal.fecha_fin) params.set("fecha_fin", filtroTemporal.fecha_fin);
+        if (filtroTemporal.hora_inicio !== "") params.set("hora_inicio", String(filtroTemporal.hora_inicio));
+        if (filtroTemporal.hora_fin !== "") params.set("hora_fin", String(filtroTemporal.hora_fin));
         Object.entries(extra).forEach(([k, v]) => {
-            if (v !== undefined && v !== null) params.set(k, String(v));
+            if (v !== undefined && v !== null && v !== "") params.set(k, String(v));
         });
         return params.toString();
+    }
+
+    function sucursalEfectivaEscritura() {
+        return filtroTemporal.sucursal_id && filtroTemporal.sucursal_id !== "todas"
+            ? filtroTemporal.sucursal_id
+            : "SUC-NORTE";
     }
 
     // Navegación ARIA Tablist (clic + ArrowLeft/ArrowRight/Home/End)
@@ -52,9 +134,7 @@
         const tabs = Array.from(document.querySelectorAll('[role="tab"]'));
         const panes = Array.from(document.querySelectorAll('[role="tabpanel"]'));
 
-        panes.forEach((pane) => {
-            pane.classList.toggle("active", pane.id === moduloId);
-        });
+        panes.forEach((pane) => pane.classList.toggle("active", pane.id === moduloId));
         tabs.forEach((tab) => {
             const esActivo = tab.getAttribute("aria-controls") === moduloId;
             tab.classList.toggle("active", esActivo);
@@ -64,7 +144,9 @@
 
         moduloActivo = moduloId;
 
-        if (moduloId === "tab-percha") {
+        if (moduloId === "tab-vivo") {
+            sincronizarMapa2D();
+        } else if (moduloId === "tab-percha") {
             cargarHeatmaps();
         } else if (moduloId === "tab-inventario") {
             cargarInventarioReal();
@@ -81,9 +163,7 @@
         const tabs = Array.from(tablist.querySelectorAll('[role="tab"]'));
 
         tabs.forEach((tab, idx) => {
-            tab.addEventListener("click", () => {
-                cambiarModulo(tab.getAttribute("aria-controls"));
-            });
+            tab.addEventListener("click", () => cambiarModulo(tab.getAttribute("aria-controls")));
             tab.addEventListener("keydown", (ev) => {
                 let nextIdx = null;
                 if (ev.key === "ArrowRight") nextIdx = (idx + 1) % tabs.length;
@@ -99,19 +179,33 @@
         });
     }
 
-    // Filtros temporales globales
+    // Etiquetas de período, franja horaria y sucursal
     function actualizarEtiquetasPeriodo() {
-        const mapNombre = { dia: "Día", semana: "Semana", mes: "Mes" };
+        const mapNombre = { hora: "Hora", dia: "Día", semana: "Semana", mes: "Mes" };
         const agrupTxt = mapNombre[filtroTemporal.agrupacion] || "Semana";
         const lblChart = document.getElementById("lbl-agrupacion-chart");
         if (lblChart) lblChart.textContent = agrupTxt;
 
-        const textoRango = filtroTemporal.fecha_inicio
-            ? `Rango: ${filtroTemporal.fecha_inicio} a ${filtroTemporal.fecha_fin}`
-            : `Últimos ${filtroTemporal.dias} días (${agrupTxt})`;
+        const selSuc = document.getElementById("select-sucursal-global");
+        const nombreSuc = selSuc ? selSuc.options[selSuc.selectedIndex]?.text || filtroTemporal.sucursal_id : filtroTemporal.sucursal_id;
+
+        let textoRango = "";
+        if (filtroTemporal.fecha_inicio) {
+            textoRango = `${filtroTemporal.fecha_inicio} a ${filtroTemporal.fecha_fin || filtroTemporal.fecha_inicio}`;
+        } else if (filtroTemporal.horas !== null) {
+            textoRango = filtroTemporal.horas === 1 ? "Última 1 hora" : `Últimas ${filtroTemporal.horas} horas`;
+        } else {
+            textoRango = `Últimos ${filtroTemporal.dias} días (${agrupTxt})`;
+        }
+
+        if (filtroTemporal.hora_inicio !== "" || filtroTemporal.hora_fin !== "") {
+            const hi = filtroTemporal.hora_inicio !== "" ? String(filtroTemporal.hora_inicio).padStart(2, "0") : "00";
+            const hf = filtroTemporal.hora_fin !== "" ? String(filtroTemporal.hora_fin).padStart(2, "0") : "23";
+            textoRango += ` | ${hi}:00-${hf}:59`;
+        }
 
         const sub = document.getElementById("subtitulo-periodo-activo");
-        if (sub) sub.textContent = `Datos históricos desde Turso • ${textoRango}`;
+        if (sub) sub.textContent = `${nombreSuc} • ${textoRango}`;
 
         ["badge-rango-fechas", "badge-rango-fechas-percha"].forEach((id) => {
             const el = document.getElementById(id);
@@ -120,18 +214,54 @@
     }
 
     async function refrescarDashboardsPorPeriodo() {
-        const tareas = [actualizarDatosDashboard(), cargarResumenEjecutivoPublicidad()];
+        marcarEstadoCarga("Actualizando datos...");
+        const tareas = [
+            actualizarDatosDashboard(),
+            cargarResumenEjecutivoPublicidad(),
+            sincronizarMapa2D(),
+        ];
         if (moduloActivo === "tab-percha") tareas.push(cargarHeatmaps());
         if (moduloActivo === "tab-inventario") tareas.push(cargarInventarioReal());
-        await Promise.all(tareas);
+        if (moduloActivo === "tab-config") tareas.push(cargarConfiguracionMapa());
+        await Promise.allSettled(tareas);
+        const ahora = new Date();
+        const hh = String(ahora.getHours()).padStart(2, "0");
+        const mm = String(ahora.getMinutes()).padStart(2, "0");
+        const ss = String(ahora.getSeconds()).padStart(2, "0");
+        marcarEstadoCarga(`Actualizado ${hh}:${mm}:${ss}`);
     }
 
-    function inicializarFiltrosTemporales() {
+    function marcarBotonPresetActivo(btnActivo) {
+        document.querySelectorAll(".btn-periodo-preset").forEach((b) => {
+            const activo = b === btnActivo;
+            b.setAttribute("aria-pressed", activo ? "true" : "false");
+            b.className = activo
+                ? "btn-periodo-preset min-h-[36px] px-3 py-1 rounded-lg text-xs font-bold border border-kovaq-navy bg-kovaq-navy text-white"
+                : "btn-periodo-preset min-h-[36px] px-3 py-1 rounded-lg text-xs font-bold border border-kovaq-control bg-white text-kovaq-navy";
+        });
+    }
+
+    function inicializarFiltrosTemporalesYSucursal() {
+        const selSuc = document.getElementById("select-sucursal-global");
+        if (selSuc) {
+            selSuc.addEventListener("change", () => {
+                filtroTemporal.sucursal_id = selSuc.value;
+                actualizarEtiquetasPeriodo();
+                refrescarDashboardsPorPeriodo();
+            });
+        }
+
         const presetBtns = Array.from(document.querySelectorAll(".btn-periodo-preset"));
         presetBtns.forEach((btn) => {
             btn.addEventListener("click", () => {
                 filtroTemporal.agrupacion = btn.dataset.agrup || "semana";
-                filtroTemporal.dias = parseInt(btn.dataset.dias || "30", 10);
+                if (btn.dataset.horas) {
+                    filtroTemporal.horas = parseInt(btn.dataset.horas, 10);
+                    filtroTemporal.dias = 1;
+                } else {
+                    filtroTemporal.horas = null;
+                    filtroTemporal.dias = parseInt(btn.dataset.dias || "30", 10);
+                }
                 filtroTemporal.fecha_inicio = "";
                 filtroTemporal.fecha_fin = "";
 
@@ -143,14 +273,19 @@
                 const selAgrup = document.getElementById("select-agrupacion-temporal");
                 if (selAgrup) selAgrup.value = filtroTemporal.agrupacion;
 
-                presetBtns.forEach((b) => {
-                    const activo = b === btn;
-                    b.setAttribute("aria-pressed", activo ? "true" : "false");
-                    b.className = activo
-                        ? "btn-periodo-preset min-h-[36px] px-3 py-1 rounded-lg text-xs font-bold border border-kovaq-navy bg-kovaq-navy text-white"
-                        : "btn-periodo-preset min-h-[36px] px-3 py-1 rounded-lg text-xs font-bold border border-kovaq-control bg-white text-kovaq-navy";
-                });
+                marcarBotonPresetActivo(btn);
+                actualizarEtiquetasPeriodo();
+                refrescarDashboardsPorPeriodo();
+            });
+        });
 
+        const hiSel = document.getElementById("filtro-hora-inicio");
+        const hfSel = document.getElementById("filtro-hora-fin");
+        [hiSel, hfSel].forEach((sel) => {
+            if (!sel) return;
+            sel.addEventListener("change", () => {
+                filtroTemporal.hora_inicio = hiSel ? hiSel.value : "";
+                filtroTemporal.hora_fin = hfSel ? hfSel.value : "";
                 actualizarEtiquetasPeriodo();
                 refrescarDashboardsPorPeriodo();
             });
@@ -161,13 +296,52 @@
             btnRango.addEventListener("click", () => {
                 const fi = document.getElementById("filtro-fecha-inicio")?.value || "";
                 const ff = document.getElementById("filtro-fecha-fin")?.value || "";
-                if (!fi) {
-                    mostrarAviso("global-status-banner", "Selecciona al menos la fecha de inicio para aplicar un rango personalizado.", "error");
+                const hi = hiSel?.value || "";
+                const hf = hfSel?.value || "";
+
+                if (!fi && hi === "" && hf === "") {
+                    mostrarAviso("global-status-banner", "Selecciona una fecha de inicio o un rango de horas para filtrar.", "error");
                     return;
                 }
-                filtroTemporal.fecha_inicio = fi;
-                filtroTemporal.fecha_fin = ff || fi;
-                mostrarAviso("global-status-banner", `Filtro aplicado del ${filtroTemporal.fecha_inicio} al ${filtroTemporal.fecha_fin}.`, "ok");
+                if (fi) {
+                    filtroTemporal.fecha_inicio = fi;
+                    filtroTemporal.fecha_fin = ff || fi;
+                    filtroTemporal.horas = null;
+                    if (fi === (ff || fi)) {
+                        filtroTemporal.agrupacion = "hora";
+                        const selAgrup = document.getElementById("select-agrupacion-temporal");
+                        if (selAgrup) selAgrup.value = "hora";
+                    }
+                    marcarBotonPresetActivo(null);
+                }
+                filtroTemporal.hora_inicio = hi;
+                filtroTemporal.hora_fin = hf;
+
+                mostrarAviso("global-status-banner", "Filtro temporal y horario aplicado a todos los paneles y mapa de calor.", "ok");
+                actualizarEtiquetasPeriodo();
+                refrescarDashboardsPorPeriodo();
+            });
+        }
+
+        const btnLimpiar = document.getElementById("btn-limpiar-filtros");
+        if (btnLimpiar) {
+            btnLimpiar.addEventListener("click", () => {
+                filtroTemporal.agrupacion = "semana";
+                filtroTemporal.dias = 30;
+                filtroTemporal.horas = null;
+                filtroTemporal.fecha_inicio = "";
+                filtroTemporal.fecha_fin = "";
+                filtroTemporal.hora_inicio = "";
+                filtroTemporal.hora_fin = "";
+
+                ["filtro-fecha-inicio", "filtro-fecha-fin", "filtro-hora-inicio", "filtro-hora-fin"].forEach((id) => {
+                    const el = document.getElementById(id);
+                    if (el) el.value = "";
+                });
+                const selAgrup = document.getElementById("select-agrupacion-temporal");
+                if (selAgrup) selAgrup.value = "semana";
+                marcarBotonPresetActivo(document.getElementById("btn-periodo-mes"));
+                mostrarAviso("global-status-banner", "Filtros restablecidos a Últimos 30 días.", "info");
                 actualizarEtiquetasPeriodo();
                 refrescarDashboardsPorPeriodo();
             });
@@ -183,200 +357,639 @@
         }
     }
 
-    // Plano Topológico 2D
+    async function cargarSucursales() {
+        try {
+            const res = await fetch("/api/branches");
+            if (!res.ok) return;
+            const data = await res.json();
+            const lista = data.sucursales || [];
+            poblarSelectorSucursales(lista);
+            renderTablaSucursales(lista);
+        } catch (_e) {
+            // Silencioso
+        }
+    }
+
+    function poblarSelectorSucursales(lista) {
+        const sel = document.getElementById("select-sucursal-global");
+        if (!sel || lista.length === 0) return;
+        const prev = filtroTemporal.sucursal_id || "SUC-NORTE";
+        sel.textContent = "";
+        lista.forEach((s) => {
+            const opt = document.createElement("option");
+            opt.value = s.id;
+            opt.textContent = `${s.nombre} (${s.ciudad})`;
+            sel.appendChild(opt);
+        });
+        const optAll = document.createElement("option");
+        optAll.value = "todas";
+        optAll.textContent = "Todas las sucursales (Consolidado)";
+        sel.appendChild(optAll);
+        sel.value = Array.from(sel.options).some((o) => o.value === prev) ? prev : lista[0].id;
+        filtroTemporal.sucursal_id = sel.value;
+        actualizarEtiquetasPeriodo();
+    }
+
+    function renderTablaSucursales(lista) {
+        const tbody = document.getElementById("tabla-sucursales-body");
+        if (!tbody) return;
+        tbody.textContent = "";
+        lista.forEach((s) => {
+            const tr = document.createElement("tr");
+            const tdId = document.createElement("th");
+            tdId.scope = "row";
+            tdId.className = "p-2.5 font-mono-num font-bold text-kovaq-orange";
+            tdId.textContent = s.id;
+            const tdNom = document.createElement("td");
+            tdNom.className = "p-2.5 font-bold";
+            tdNom.textContent = s.nombre;
+            const tdCiu = document.createElement("td");
+            tdCiu.className = "p-2.5 text-kovaq-slate";
+            tdCiu.textContent = s.ciudad;
+            const tdFmt = document.createElement("td");
+            tdFmt.className = "p-2.5";
+            tdFmt.textContent = s.formato;
+            const tdArea = document.createElement("td");
+            tdArea.className = "p-2.5 font-mono-num";
+            tdArea.textContent = `${Number(s.area_m2 || 1200).toLocaleString()} m2`;
+            tr.append(tdId, tdNom, tdCiu, tdFmt, tdArea);
+            tbody.appendChild(tr);
+        });
+    }
+
+    // =========================================================================
+    // MAPA ARQUITECTÓNICO 2D REAL + MAPA DE CALOR TÉRMICO ENLAZADO AL PERÍODO
+    // =========================================================================
+    function renderizarMapaCalorTermico(ctx, W, H, grid) {
+        if (!Array.isArray(grid) || grid.length === 0 || !grid[0].length) return;
+        const rows = grid.length;
+        const cols = grid[0].length;
+        let maxVal = 0.0;
+        for (let r = 0; r < rows; r++) {
+            for (let c = 0; c < cols; c++) {
+                if (grid[r][c] > maxVal) maxVal = grid[r][c];
+            }
+        }
+        if (maxVal <= 0.01) return;
+
+        const ow = heatOffscreen.width;
+        const oh = heatOffscreen.height;
+        const octx = heatOffscreen.getContext("2d", { willReadFrequently: true });
+        octx.clearRect(0, 0, ow, oh);
+
+        const cw = ow / cols;
+        const ch = oh / rows;
+        const radio = Math.max(cw, ch) * 1.85;
+
+        for (let r = 0; r < rows; r++) {
+            for (let c = 0; c < cols; c++) {
+                const val = grid[r][c];
+                if (val <= 0.05) continue;
+                const intensity = Math.min(1.0, val / maxVal);
+                const cx = (c + 0.5) * cw;
+                const cy = (r + 0.5) * ch;
+                const grad = octx.createRadialGradient(cx, cy, 1, cx, cy, radio);
+                grad.addColorStop(0, `rgba(0, 0, 0, ${(intensity * 0.62).toFixed(3)})`);
+                grad.addColorStop(1, "rgba(0, 0, 0, 0)");
+                octx.fillStyle = grad;
+                octx.beginPath();
+                octx.arc(cx, cy, radio, 0, Math.PI * 2);
+                octx.fill();
+            }
+        }
+
+        const imgData = octx.getImageData(0, 0, ow, oh);
+        const px = imgData.data;
+        for (let i = 0; i < px.length; i += 4) {
+            const alpha = px[i + 3];
+            if (alpha > 8) {
+                const idx = Math.min(255, alpha) * 4;
+                px[i] = heatLUT[idx];
+                px[i + 1] = heatLUT[idx + 1];
+                px[i + 2] = heatLUT[idx + 2];
+                px[i + 3] = heatLUT[idx + 3];
+            }
+        }
+        octx.putImageData(imgData, 0, 0);
+
+        ctx.save();
+        ctx.globalAlpha = 0.72;
+        ctx.drawImage(heatOffscreen, 0, 0, W, H);
+        ctx.restore();
+    }
+
     function dibujarPlanoTienda2D(data) {
         const canvas = document.getElementById("store-map-canvas");
-        if (!canvas) return;
+        if (!canvas || !data) return;
+        ultimoEstadoMapa = data;
+
         const ctx = canvas.getContext("2d");
         const W = canvas.width;
         const H = canvas.height;
+        const plano = data.plano_arquitectura || {};
 
-        ctx.fillStyle = "#08172B";
+        // 1. Piso arquitectónico de tienda con retícula de baldosas
+        ctx.fillStyle = "#F8FAFC";
         ctx.fillRect(0, 0, W, H);
 
-        ctx.strokeStyle = "rgba(255, 255, 255, 0.06)";
+        ctx.strokeStyle = "#E2E8F0";
         ctx.lineWidth = 1;
-        for (let x = 0; x < W; x += 46) {
-            ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
+        for (let x = 24; x < W - 20; x += 32) {
+            ctx.beginPath(); ctx.moveTo(x, 18); ctx.lineTo(x, H - 18); ctx.stroke();
         }
-        for (let y = 0; y < H; y += 45) {
-            ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
-        }
-
-        // Matriz de calor espacial
-        const grid = data.heatmap_grid || [];
-        if (grid.length > 0 && grid[0].length > 0) {
-            const rows = grid.length;
-            const cols = grid[0].length;
-            let maxVal = 1.0;
-            for (let r = 0; r < rows; r++) {
-                for (let c = 0; c < cols; c++) {
-                    if (grid[r][c] > maxVal) maxVal = grid[r][c];
-                }
-            }
-            const cellW = W / cols;
-            const cellH = H / rows;
-            for (let r = 0; r < rows; r++) {
-                for (let c = 0; c < cols; c++) {
-                    const val = grid[r][c];
-                    if (val <= 0.1) continue;
-                    const norm = Math.min(1.0, val / maxVal);
-                    const gx = (c + 0.5) * cellW;
-                    const gy = (r + 0.5) * cellH;
-                    const radio = Math.max(cellW, cellH) * 0.9;
-                    const grad = ctx.createRadialGradient(gx, gy, 2, gx, gy, radio);
-                    if (norm >= 0.45) {
-                        grad.addColorStop(0, `rgba(254, 80, 0, ${(0.18 + norm * 0.32).toFixed(2)})`);
-                        grad.addColorStop(1, "rgba(254, 80, 0, 0)");
-                    } else {
-                        grad.addColorStop(0, `rgba(59, 130, 246, ${(0.12 + norm * 0.2).toFixed(2)})`);
-                        grad.addColorStop(1, "rgba(59, 130, 246, 0)");
-                    }
-                    ctx.fillStyle = grad;
-                    ctx.fillRect(c * cellW - cellW * 0.5, r * cellH - cellH * 0.5, cellW * 2, cellH * 2);
-                }
-            }
+        for (let y = 18; y < H - 18; y += 32) {
+            ctx.beginPath(); ctx.moveTo(24, y); ctx.lineTo(W - 24, y); ctx.stroke();
         }
 
-        // Puerta de entrada y línea de cajas
-        const arq = data.zonas_arquitectura || {};
-        [
-            { z: arq.puerta_entrada, stroke: "#22C55E", fill: "rgba(34, 197, 94, 0.16)", label: "PUERTA" },
-            { z: arq.linea_cajas, stroke: "#3B82F6", fill: "rgba(59, 130, 246, 0.16)", label: "CAJAS" },
-        ].forEach(({ z, stroke, fill, label }) => {
-            if (!z) return;
-            const zx = z.x * W, zy = z.y * H, zw = z.w * W, zh = z.h * H;
-            ctx.fillStyle = fill;
-            ctx.strokeStyle = stroke;
-            ctx.lineWidth = 2;
-            ctx.fillRect(zx, zy, zw, zh);
-            ctx.strokeRect(zx, zy, zw, zh);
-            ctx.fillStyle = "#FFFFFF";
-            ctx.font = "bold 10px 'JetBrains Mono', monospace";
-            ctx.fillText(label, zx + 4, zy + 16);
-        });
-
-        // Cámaras y conos FOV
-        (data.camaras || []).forEach((cam) => {
-            const cx = cam.pos_x * W;
-            const cy = cam.pos_y * H;
-            const rad = ((cam.angulo || 0) * Math.PI) / 180;
-            const fovRad = (((cam.fov || 68) * Math.PI) / 180) / 2;
-            const alcancePx = (cam.alcance || 0.42) * W * 0.55;
-            const esActiva = cam.id === data.camara_activa;
-
+        // 2. Zona de Bodega / Reposición (fondo rayado arquitectónico para personal)
+        const bod = plano.bodega;
+        if (bod) {
+            const bx = bod.x * W, by = bod.y * H, bw = bod.w * W, bh = bod.h * H;
             ctx.save();
+            ctx.fillStyle = "#E2E8F0";
+            ctx.fillRect(bx, by, bw, bh);
             ctx.beginPath();
-            ctx.moveTo(cx, cy);
-            ctx.arc(cx, cy, alcancePx, rad - fovRad, rad + fovRad);
-            ctx.closePath();
-            ctx.fillStyle = esActiva ? "rgba(254, 80, 0, 0.12)" : "rgba(255, 255, 255, 0.04)";
-            ctx.fill();
-            ctx.strokeStyle = esActiva ? "rgba(254, 80, 0, 0.5)" : "rgba(255, 255, 255, 0.16)";
-            ctx.lineWidth = 1;
-            ctx.stroke();
-
-            ctx.beginPath();
-            ctx.arc(cx, cy, 7, 0, Math.PI * 2);
-            ctx.fillStyle = esActiva ? "#FE5000" : "#334155";
-            ctx.fill();
-            ctx.strokeStyle = "#FFFFFF";
+            ctx.rect(bx, by, bw, bh);
+            ctx.clip();
+            ctx.strokeStyle = "#CBD5E1";
+            ctx.lineWidth = 1.5;
+            for (let hx = bx - bh; hx < bx + bw + bh; hx += 14) {
+                ctx.beginPath(); ctx.moveTo(hx, by + bh); ctx.lineTo(hx + bh, by); ctx.stroke();
+            }
+            ctx.restore();
+            ctx.strokeStyle = "#475569";
             ctx.lineWidth = 2;
-            ctx.stroke();
+            ctx.strokeRect(bx, by, bw, bh);
+            ctx.fillStyle = "#334155";
+            ctx.font = "bold 11px 'Space Grotesk', sans-serif";
+            ctx.fillText(bod.label || "BODEGA / PERSONAL", bx + 12, by + bh * 0.62);
+        }
 
-            ctx.fillStyle = "#FFFFFF";
-            ctx.font = "bold 10px 'Space Grotesk', sans-serif";
-            ctx.fillText(cam.id, cx - 16, cy - 11);
+        // 3. Capa de Mapa de Calor Térmico (vinculado al período y sucursal seleccionados)
+        if (capasMapa.calor) {
+            renderizarMapaCalorTermico(ctx, W, H, data.heatmap_grid || []);
+        }
+
+        // 4. Muros perimetrales estructurales de la tienda
+        const wallPadX = 24;
+        const wallPadY = 18;
+        ctx.save();
+        ctx.strokeStyle = "#0C2340";
+        ctx.lineWidth = 6;
+        ctx.strokeRect(wallPadX, wallPadY, W - wallPadX * 2, H - wallPadY * 2);
+        ctx.restore();
+
+        // 5. Etiquetas de Pasillos y Cabeceras Promocionales (Infraestructura interna)
+        (plano.pasillos || []).forEach((ps) => {
+            ctx.save();
+            ctx.fillStyle = "rgba(12, 35, 64, 0.52)";
+            ctx.font = "bold 10px 'JetBrains Mono', monospace";
+            ctx.fillText(ps.label || "", ps.x * W, ps.y * H);
             ctx.restore();
         });
 
-        // Perchas mapeadas
+        (plano.cabeceras || []).forEach((cab) => {
+            const cx = cab.x * W, cy = cab.y * H, cw = cab.w * W, ch = cab.h * H;
+            ctx.save();
+            ctx.fillStyle = "#FFF7ED";
+            ctx.strokeStyle = "#C23B00";
+            ctx.lineWidth = 1.5;
+            ctx.fillRect(cx, cy, cw, ch);
+            ctx.strokeRect(cx, cy, cw, ch);
+            ctx.fillStyle = "#C23B00";
+            ctx.font = "bold 9px 'JetBrains Mono', monospace";
+            ctx.fillText(cab.label || "POP", cx + 4, cy + ch / 2 + 3);
+            ctx.restore();
+        });
+
+        // 6. Puerta de Acceso Principal (abertura en muro izquierdo + puertas corredizas + flechas)
+        const puerta = plano.puerta_entrada || (data.zonas_arquitectura || {}).puerta_entrada;
+        if (puerta) {
+            const px = puerta.x * W, py = puerta.y * H, pw = puerta.w * W, ph = puerta.h * H;
+            ctx.save();
+            ctx.fillStyle = "#ECFDF5";
+            ctx.fillRect(wallPadX - 4, py, pw + 10, ph);
+            ctx.strokeStyle = "#059669";
+            ctx.lineWidth = 2.5;
+            ctx.strokeRect(px, py, pw, ph);
+            // Hojas corredizas de vidrio
+            ctx.strokeStyle = "#10B981";
+            ctx.lineWidth = 3;
+            ctx.beginPath();
+            ctx.moveTo(wallPadX, py + ph * 0.12);
+            ctx.lineTo(wallPadX, py + ph * 0.44);
+            ctx.moveTo(wallPadX, py + ph * 0.56);
+            ctx.lineTo(wallPadX, py + ph * 0.88);
+            ctx.stroke();
+            // Flecha verde de entrada
+            ctx.fillStyle = "#047857";
+            ctx.font = "bold 10px 'Space Grotesk', sans-serif";
+            ctx.save();
+            ctx.translate(px + pw * 0.55, py + ph * 0.5);
+            ctx.rotate(-Math.PI / 2);
+            ctx.textAlign = "center";
+            ctx.fillText(puerta.nombre || "ACCESO", 0, 3);
+            ctx.restore();
+            ctx.restore();
+        }
+
+        // 7. Zona de Atención / Retiro y Línea de Cajas con estaciones POS individuales
+        const aten = plano.zona_atencion;
+        if (aten) {
+            const ax = aten.x * W, ay = aten.y * H, aw = aten.w * W, ah = aten.h * H;
+            ctx.save();
+            ctx.fillStyle = "#F1F5F9";
+            ctx.strokeStyle = "#64748B";
+            ctx.lineWidth = 1.5;
+            ctx.fillRect(ax, ay, aw, ah);
+            ctx.strokeRect(ax, ay, aw, ah);
+            ctx.fillStyle = "#334155";
+            ctx.font = "bold 9px 'Space Grotesk', sans-serif";
+            ctx.fillText(aten.label || "ATENCIÓN", ax + 6, ay + ah / 2 + 3);
+            ctx.restore();
+        }
+
+        const cajas = plano.linea_cajas || (data.zonas_arquitectura || {}).linea_cajas;
+        if (cajas) {
+            const cx = cajas.x * W, cy = cajas.y * H, cw = cajas.w * W, ch = cajas.h * H;
+            const nCajas = Number(cajas.cajas || 4);
+            ctx.save();
+            ctx.fillStyle = "rgba(239, 246, 255, 0.92)";
+            ctx.strokeStyle = "#1D4ED8";
+            ctx.lineWidth = 2;
+            ctx.fillRect(cx, cy, cw, ch);
+            ctx.strokeRect(cx, cy, cw, ch);
+
+            ctx.fillStyle = "#1E3A8A";
+            ctx.font = "bold 10px 'Space Grotesk', sans-serif";
+            ctx.fillText(cajas.nombre || "CAJAS", cx + 6, cy + 14);
+
+            const slotH = (ch - 24) / Math.max(1, nCajas);
+            for (let i = 0; i < nCajas; i++) {
+                const sy = cy + 20 + i * slotH;
+                ctx.fillStyle = "#DBEAFE";
+                ctx.strokeStyle = "#2563EB";
+                ctx.lineWidth = 1.2;
+                ctx.fillRect(cx + 8, sy + 2, cw - 16, Math.max(14, slotH - 6));
+                ctx.strokeRect(cx + 8, sy + 2, cw - 16, Math.max(14, slotH - 6));
+                ctx.fillStyle = "#1E3A8A";
+                ctx.font = "bold 9px 'JetBrains Mono', monospace";
+                ctx.fillText(`POS ${i + 1}`, cx + 14, sy + Math.max(12, (slotH - 4) * 0.65));
+            }
+            ctx.restore();
+        }
+
+        // 8. Columnas estructurales
+        (plano.columnas || []).forEach(([colX, colY]) => {
+            ctx.save();
+            ctx.fillStyle = "#334155";
+            ctx.fillRect(colX * W - 6, colY * H - 6, 12, 12);
+            ctx.strokeStyle = "#0F172A";
+            ctx.lineWidth = 1.5;
+            ctx.strokeRect(colX * W - 6, colY * H - 6, 12, 12);
+            ctx.restore();
+        });
+
+        // 9. Góndolas / Perchas con arquitectura de estantería, temperatura y tomas del período
         (data.perchas || []).forEach((p) => {
             const px = p.map_x * W, py = p.map_y * H, pw = p.map_w * W, ph = p.map_h * H;
+            const temp = p.temperatura || "fria";
+            const bordeColor = temp === "caliente" ? "#DC2626" : (temp === "templada" ? "#D97706" : "#2563EB");
+            const badgeBg = temp === "caliente" ? "#FEE2E2" : (temp === "templada" ? "#FEF3C7" : "#DBEAFE");
+            const badgeTxt = temp === "caliente" ? "#991B1B" : (temp === "templada" ? "#92400E" : "#1E40AF");
+            const tempLbl = temp === "caliente" ? "CALIENTE" : (temp === "templada" ? "MEDIA" : "FRÍA");
+
             ctx.save();
-            ctx.fillStyle = "rgba(15, 23, 42, 0.92)";
-            ctx.strokeStyle = p.color || "#FE5000";
-            ctx.lineWidth = 2;
+            // Sombra sutil de mobiliario
+            ctx.fillStyle = "rgba(12, 35, 64, 0.10)";
+            ctx.fillRect(px + 3, py + 3, pw, ph);
+
+            // Cuerpo arquitectónico de góndola
+            ctx.fillStyle = "#FFFFFF";
+            ctx.strokeStyle = bordeColor;
+            ctx.lineWidth = 2.5;
             ctx.beginPath();
-            ctx.roundRect(px, py, pw, ph, 8);
+            ctx.roundRect(px, py, pw, ph, 6);
             ctx.fill();
             ctx.stroke();
 
-            ctx.fillStyle = "#FFFFFF";
-            ctx.font = "bold 11px 'Space Grotesk', sans-serif";
-            ctx.fillText(String(p.nombre || p.id).slice(0, 26), px + 8, py + 19);
-
-            ctx.fillStyle = "#CBD5E1";
-            ctx.font = "10px 'JetBrains Mono', monospace";
-            ctx.fillText(`Tomas: ${p.tomas || 0} | Dev: ${p.devoluciones || 0}`, px + 8, py + 36);
-            ctx.restore();
-        });
-
-        // Vectores anónimos de personas
-        (data.personas || []).forEach((pers) => {
-            const px = pers.x * W;
-            const py = pers.y * H;
-            const esCli = pers.es_cliente_valido !== false;
-            const color = esCli ? (pers.color || "#22C55E") : "#94A3B8";
-
-            if (Array.isArray(pers.trayectoria) && pers.trayectoria.length > 1) {
-                ctx.save();
-                ctx.strokeStyle = color;
-                ctx.lineWidth = esCli ? 2 : 1.2;
-                ctx.setLineDash(esCli ? [] : [4, 4]);
-                ctx.beginPath();
-                pers.trayectoria.forEach((pt, i) => {
-                    if (i === 0) ctx.moveTo(pt.x * W, pt.y * H);
-                    else ctx.lineTo(pt.x * W, pt.y * H);
-                });
-                ctx.stroke();
-                ctx.restore();
-            }
-
-            ctx.save();
-            ctx.fillStyle = color;
-            ctx.strokeStyle = "#FFFFFF";
-            ctx.lineWidth = 2;
+            // Línea central estructural de góndola doble faz
+            ctx.strokeStyle = "#CBD5E1";
+            ctx.lineWidth = 1;
             ctx.beginPath();
-            if (esCli) {
-                ctx.arc(px, py, 8, 0, Math.PI * 2);
+            if (pw >= ph) {
+                ctx.moveTo(px + 6, py + ph / 2);
+                ctx.lineTo(px + pw - 6, py + ph / 2);
             } else {
-                ctx.moveTo(px, py - 8);
-                ctx.lineTo(px + 8, py);
-                ctx.lineTo(px, py + 8);
-                ctx.lineTo(px - 8, py);
-                ctx.closePath();
+                ctx.moveTo(px + pw / 2, py + 6);
+                ctx.lineTo(px + pw / 2, py + ph - 6);
             }
-            ctx.fill();
             ctx.stroke();
 
-            ctx.fillStyle = "#FFFFFF";
+            // Cabecera de texto de percha
+            ctx.fillStyle = "#0C2340";
+            ctx.font = "bold 11px 'Space Grotesk', sans-serif";
+            ctx.fillText(p.id, px + 8, py + 16);
+
+            ctx.fillStyle = "#475569";
+            ctx.font = "600 10px 'Inter', sans-serif";
+            const catTxt = String(p.categoria || "").slice(0, 14);
+            ctx.fillText(catTxt, px + 8, py + 30);
+
+            // Métrica del período enlazada
+            ctx.fillStyle = "#0C2340";
             ctx.font = "bold 10px 'JetBrains Mono', monospace";
-            ctx.fillText(pers.etiqueta || "S#1", px + 11, py + 4);
+            ctx.fillText(`${p.tomas || 0} tomas`, px + 8, py + Math.min(ph - 8, 46));
+
+            // Etiqueta de temperatura
+            if (pw >= 120) {
+                const bw = 54;
+                ctx.fillStyle = badgeBg;
+                ctx.fillRect(px + pw - bw - 6, py + 6, bw, 16);
+                ctx.fillStyle = badgeTxt;
+                ctx.font = "bold 9px 'JetBrains Mono', monospace";
+                ctx.fillText(tempLbl, px + pw - bw - 2, py + 17);
+            }
+
+            // Indicador de promoción POP activa
+            if (Array.isArray(p.promociones) && p.promociones.length > 0 && ph >= 52) {
+                ctx.fillStyle = "#C23B00";
+                ctx.fillRect(px + pw - 36, py + ph - 20, 30, 14);
+                ctx.fillStyle = "#FFFFFF";
+                ctx.font = "bold 8px 'JetBrains Mono', monospace";
+                ctx.fillText("POP", px + pw - 30, py + ph - 10);
+            }
             ctx.restore();
         });
 
-        const totalClientes = (data.personas || []).filter((p) => p.es_cliente_valido !== false).length;
+        // 10. Cámaras CCTV de techo con conos de campo de visión (FOV)
+        if (capasMapa.fov) {
+            (data.camaras || []).forEach((cam) => {
+                const cx = cam.pos_x * W;
+                const cy = cam.pos_y * H;
+                const rad = ((cam.angulo || 0) * Math.PI) / 180;
+                const fovRad = (((cam.fov || 70) * Math.PI) / 180) / 2;
+                const alcancePx = (cam.alcance || 0.4) * W * 0.52;
+                const esActiva = cam.id === data.camara_activa;
+
+                ctx.save();
+                ctx.beginPath();
+                ctx.moveTo(cx, cy);
+                ctx.arc(cx, cy, alcancePx, rad - fovRad, rad + fovRad);
+                ctx.closePath();
+                ctx.fillStyle = esActiva ? "rgba(194, 59, 0, 0.12)" : "rgba(12, 35, 64, 0.06)";
+                ctx.fill();
+                ctx.strokeStyle = esActiva ? "rgba(194, 59, 0, 0.55)" : "rgba(12, 35, 64, 0.25)";
+                ctx.setLineDash([5, 4]);
+                ctx.lineWidth = 1.3;
+                ctx.stroke();
+                ctx.setLineDash([]);
+
+                // Cuerpo físico de cámara rotado hacia su ángulo de cobertura
+                ctx.translate(cx, cy);
+                ctx.rotate(rad);
+                ctx.fillStyle = esActiva ? "#C23B00" : "#0C2340";
+                ctx.strokeStyle = "#FFFFFF";
+                ctx.lineWidth = 1.8;
+                ctx.beginPath();
+                ctx.roundRect(-9, -6, 15, 12, 3);
+                ctx.fill();
+                ctx.stroke();
+                // Lente direccional
+                ctx.beginPath();
+                ctx.moveTo(6, -4);
+                ctx.lineTo(12, -7);
+                ctx.lineTo(12, 7);
+                ctx.lineTo(6, 4);
+                ctx.closePath();
+                ctx.fill();
+                ctx.restore();
+
+                // Etiqueta de cámara
+                ctx.save();
+                ctx.fillStyle = esActiva ? "#C23B00" : "#0C2340";
+                ctx.fillRect(cx - 22, cy - 24, 44, 15);
+                ctx.fillStyle = "#FFFFFF";
+                ctx.font = "bold 9px 'JetBrains Mono', monospace";
+                ctx.textAlign = "center";
+                ctx.fillText(cam.id, cx, cy - 13);
+                ctx.restore();
+            });
+        }
+
+        // 11. Vectores anónimos vivos (backend + personas trackeadas en tiempo real del video)
+        if (capasMapa.vectores) {
+            const listaPersonas = combinarPersonasMapa(data.personas || []);
+            listaPersonas.forEach((pers) => {
+                const px = pers.x * W;
+                const py = pers.y * H;
+                const esCli = pers.es_cliente_valido !== false;
+                const color = esCli ? (pers.origen === "video_yolo" ? "#C23B00" : "#059669") : "#64748B";
+
+                if (Array.isArray(pers.trayectoria) && pers.trayectoria.length > 1) {
+                    ctx.save();
+                    ctx.strokeStyle = color;
+                    ctx.lineWidth = esCli ? 2 : 1.2;
+                    ctx.setLineDash(esCli ? [] : [4, 4]);
+                    ctx.beginPath();
+                    pers.trayectoria.forEach((pt, i) => {
+                        if (i === 0) ctx.moveTo(pt.x * W, pt.y * H);
+                        else ctx.lineTo(pt.x * W, pt.y * H);
+                    });
+                    ctx.stroke();
+                    ctx.restore();
+                }
+
+                ctx.save();
+                ctx.fillStyle = color;
+                ctx.strokeStyle = "#FFFFFF";
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                if (esCli) {
+                    ctx.arc(px, py, 7, 0, Math.PI * 2);
+                } else {
+                    ctx.moveTo(px, py - 7);
+                    ctx.lineTo(px + 7, py);
+                    ctx.lineTo(px, py + 7);
+                    ctx.lineTo(px - 7, py);
+                    ctx.closePath();
+                }
+                ctx.fill();
+                ctx.stroke();
+
+                ctx.fillStyle = "#0C2340";
+                ctx.font = "bold 10px 'JetBrains Mono', monospace";
+                ctx.fillText(pers.etiqueta || "CLI", px + 10, py + 4);
+                ctx.restore();
+            });
+        }
+
+        // 12. Escala arquitectónica inferior izquierda
+        const dims = plano.dimensiones_m || [42, 24];
+        ctx.save();
+        ctx.fillStyle = "rgba(255, 255, 255, 0.9)";
+        ctx.fillRect(34, H - 40, 152, 18);
+        ctx.fillStyle = "#334155";
+        ctx.font = "bold 9px 'JetBrains Mono', monospace";
+        ctx.fillText(`Escala: ${dims[0]}m x ${dims[1]}m | N ↑`, 40, H - 28);
+        ctx.restore();
+
+        const tituloEl = document.getElementById("titulo-plano-sucursal");
+        if (tituloEl && data.sucursal_nombre) {
+            tituloEl.textContent = `Mapa de Infraestructura y Calor • ${data.sucursal_nombre}`;
+        }
+        const subEl = document.getElementById("subtitulo-plano-arquitectura");
+        if (subEl) {
+            const muestras = data.heatmap_meta?.total_muestras || 0;
+            subEl.textContent = `${plano.nombre_plano || "Planta Comercial"} • ${muestras} registros espaciales en el período seleccionado.`;
+        }
+
         const totalPerchas = (data.perchas || []).length;
+        const totalCams = (data.camaras || []).length;
         canvas.setAttribute(
             "aria-label",
-            `Plano 2D activo: ${totalPerchas} perchas mapeadas, ${totalClientes} clientes anónimos en tienda y ${(data.handoffs || []).length} transiciones entre cámaras.`
+            `Mapa arquitectónico de ${data.sucursal_nombre || "sucursal"}: ${totalCams} cámaras CCTV, ${totalPerchas} perchas y ${data.heatmap_meta?.total_muestras || 0} registros de calor del período.`
         );
+    }
+
+    function combinarPersonasMapa(personasBackend) {
+        const res = [...personasBackend];
+        liveVideoPersonas.forEach((vp) => {
+            if (!vp.map) return;
+            res.push({
+                global_id: vp.id,
+                etiqueta: vp.label,
+                es_cliente_valido: vp.cliente,
+                x: vp.map[0],
+                y: vp.map[1],
+                camara_actual: "CAM-01",
+                postura_cabeza: vp.postura,
+                estado_accion: vp.accion,
+                trayectoria: [],
+                origen: "video_yolo",
+            });
+        });
+        return res;
+    }
+
+    function inicializarInteraccionMapa() {
+        const canvas = document.getElementById("store-map-canvas");
+        const tooltip = document.getElementById("map-tooltip");
+        if (!canvas || !tooltip) return;
+
+        canvas.addEventListener("mousemove", (ev) => {
+            if (!ultimoEstadoMapa) return;
+            const rect = canvas.getBoundingClientRect();
+            const nx = (ev.clientX - rect.left) / rect.width;
+            const ny = (ev.clientY - rect.top) / rect.height;
+
+            const percha = (ultimoEstadoMapa.perchas || []).find(
+                (p) => nx >= p.map_x && nx <= p.map_x + p.map_w && ny >= p.map_y && ny <= p.map_y + p.map_h
+            );
+            const cam = (ultimoEstadoMapa.camaras || []).find(
+                (c) => Math.hypot(nx - c.pos_x, ny - c.pos_y) <= 0.035
+            );
+
+            if (percha) {
+                const promoTxt = percha.promociones && percha.promociones.length > 0
+                    ? `Promo: ${percha.promociones[0].titulo}`
+                    : "Sin promo POP activa";
+                tooltip.textContent = `${percha.id} (${percha.categoria}) | Tomas: ${percha.tomas || 0} | Dev: ${percha.devoluciones || 0} | Dwell: ${percha.comportamiento?.dwell_prom || 0}s | ${promoTxt}`;
+                tooltip.style.left = `${Math.min(rect.width - 230, Math.max(8, ev.clientX - rect.left + 12))}px`;
+                tooltip.style.top = `${Math.max(8, ev.clientY - rect.top - 48)}px`;
+                tooltip.classList.remove("hidden");
+                canvas.style.cursor = "pointer";
+            } else if (cam) {
+                tooltip.textContent = `${cam.id}: ${cam.nombre} (Clic para seleccionar cámara)`;
+                tooltip.style.left = `${Math.min(rect.width - 230, Math.max(8, ev.clientX - rect.left + 12))}px`;
+                tooltip.style.top = `${Math.max(8, ev.clientY - rect.top - 40)}px`;
+                tooltip.classList.remove("hidden");
+                canvas.style.cursor = "pointer";
+            } else {
+                tooltip.classList.add("hidden");
+                canvas.style.cursor = "default";
+            }
+        });
+
+        canvas.addEventListener("mouseleave", () => {
+            tooltip.classList.add("hidden");
+        });
+
+        canvas.addEventListener("click", (ev) => {
+            if (!ultimoEstadoMapa) return;
+            const rect = canvas.getBoundingClientRect();
+            const nx = (ev.clientX - rect.left) / rect.width;
+            const ny = (ev.clientY - rect.top) / rect.height;
+            const cam = (ultimoEstadoMapa.camaras || []).find(
+                (c) => Math.hypot(nx - c.pos_x, ny - c.pos_y) <= 0.04
+            );
+            if (cam) {
+                const selCam = document.getElementById("select-camara-mapa");
+                if (selCam) {
+                    selCam.value = cam.id;
+                    selCam.dispatchEvent(new Event("change"));
+                }
+            }
+        });
+
+        // Controles de capas del mapa
+        [
+            { id: "btn-capa-calor", key: "calor" },
+            { id: "btn-capa-fov", key: "fov" },
+            { id: "btn-capa-vectores", key: "vectores" },
+        ].forEach(({ id, key }) => {
+            const btn = document.getElementById(id);
+            if (!btn) return;
+            btn.addEventListener("click", () => {
+                capasMapa[key] = !capasMapa[key];
+                btn.classList.toggle("active", capasMapa[key]);
+                btn.setAttribute("aria-pressed", capasMapa[key] ? "true" : "false");
+                if (ultimoEstadoMapa) dibujarPlanoTienda2D(ultimoEstadoMapa);
+            });
+        });
+    }
+
+    function actualizarSelectorCamaras(camaras, camActiva) {
+        const sel = document.getElementById("select-camara-mapa");
+        const selPlano = document.getElementById("plano-cam");
+        if (sel && Array.isArray(camaras) && camaras.length > 0) {
+            const prev = sel.value;
+            sel.textContent = "";
+            camaras.forEach((c) => {
+                const o = document.createElement("option");
+                o.value = c.id;
+                o.textContent = `${c.id} • ${c.nombre.split("•").pop().trim()}`;
+                sel.appendChild(o);
+            });
+            sel.value = camaras.some((c) => c.id === prev) ? prev : (camActiva && camaras.some((c) => c.id === camActiva) ? camActiva : camaras[0].id);
+        }
+        if (selPlano && Array.isArray(camaras) && camaras.length > 0) {
+            selPlano.textContent = "";
+            camaras.forEach((c) => {
+                const o = document.createElement("option");
+                o.value = c.id;
+                o.textContent = `${c.id} • ${c.nombre.slice(0, 28)}`;
+                selPlano.appendChild(o);
+            });
+        }
     }
 
     function actualizarPanelesReID(data) {
         const handoffCount = document.getElementById("map-handoff-counter");
+        const muestras = data.heatmap_meta?.total_muestras || 0;
         const handoffs = data.handoffs || [];
-        if (handoffCount) handoffCount.textContent = `${handoffs.length} handoffs activos`;
+        if (handoffCount) {
+            handoffCount.textContent = `${muestras} muestras térmicas • ${handoffs.length} handoffs`;
+        }
 
         const simBtnTxt = document.getElementById("txt-toggle-sim");
         if (simBtnTxt) {
-            simBtnTxt.textContent = data.simulacion_activa ? "Pausar simulación" : "Activar simulación";
+            simBtnTxt.textContent = data.simulacion_activa ? "Pausar" : "Activar";
         }
 
         const listaPers = document.getElementById("lista-personas-reid");
         if (listaPers) {
-            const personas = data.personas || [];
+            const personas = combinarPersonasMapa(data.personas || []);
             listaPers.textContent = "";
             if (personas.length === 0) {
                 listaPers.textContent = "Sin vectores activos en el plano en este instante.";
@@ -387,7 +1000,7 @@
                     const left = document.createElement("div");
                     const strong = document.createElement("strong");
                     strong.className = "font-mono-num text-kovaq-navy mr-2";
-                    strong.textContent = `${p.etiqueta} (${p.camara_actual})`;
+                    strong.textContent = `${p.etiqueta} (${p.camara_actual || "CAM-01"})`;
                     const accion = document.createElement("span");
                     accion.className = "text-kovaq-slate";
                     accion.textContent = p.estado_accion || "En tránsito";
@@ -428,46 +1041,252 @@
     }
 
     async function sincronizarMapa2D() {
-        if (document.hidden || moduloActivo !== "tab-vivo" || enVuelo.mapa) return;
-        enVuelo.mapa = true;
         try {
-            const res = await fetch("/api/map_state");
-            if (!res.ok) return;
+            const { res, seq } = await fetchCancelable("mapa", `/api/map_state?${construirQueryTemporal()}`);
+            if (!res.ok || seq !== reqSeq.mapa) return;
             const data = await res.json();
+            if (seq !== reqSeq.mapa) return;
+            actualizarSelectorCamaras(data.camaras || [], data.camara_activa);
             dibujarPlanoTienda2D(data);
             actualizarPanelesReID(data);
         } catch (_e) {
-            // Silencioso en desconexión temporal
-        } finally {
-            enVuelo.mapa = false;
+            // Silencioso en abort o desconexión temporal
         }
     }
 
-    // Telemetría viva y auditoría (capada a 50 filas, separada de KPIs históricos)
+    // =========================================================================
+    // MOTOR DE TRACKEO EN TIEMPO REAL SOBRE EL VIDEO (POLÍGONOS EN PERSPECTIVA + PERSONAS)
+    // =========================================================================
+    async function cargarDemoTracks() {
+        try {
+            const res = await fetch("/static/demo_tracks.json");
+            if (res.ok) {
+                demoTracks = await res.json();
+            }
+        } catch (_e) {
+            // Silencioso
+        }
+    }
+
+    function dibujarPoligonoPercha(ctx, W, H, polyNorm, label, colorHex, alignRight) {
+        if (!Array.isArray(polyNorm) || polyNorm.length < 3) return;
+        ctx.save();
+        ctx.beginPath();
+        polyNorm.forEach((pt, idx) => {
+            const px = pt[0] * W;
+            const py = pt[1] * H;
+            if (idx === 0) ctx.moveTo(px, py);
+            else ctx.lineTo(px, py);
+        });
+        ctx.closePath();
+
+        // Relleno translúcido solo dentro del polígono de la percha
+        ctx.fillStyle = colorHex === "#FE5000" ? "rgba(254, 80, 0, 0.14)" : "rgba(245, 158, 11, 0.14)";
+        ctx.fill();
+        ctx.strokeStyle = colorHex || "#FE5000";
+        ctx.lineWidth = 2.5;
+        ctx.stroke();
+
+        // Líneas sutiles de niveles en perspectiva (Superior / Ojos / Inferior)
+        if (polyNorm.length >= 5) {
+            ctx.strokeStyle = "rgba(255, 255, 255, 0.28)";
+            ctx.lineWidth = 1;
+            ctx.setLineDash([6, 4]);
+            const pTopNear = alignRight ? polyNorm[1] : polyNorm[0];
+            const pTopFar = alignRight ? polyNorm[0] : polyNorm[1];
+            const pBotFar = alignRight ? polyNorm[4] : polyNorm[2];
+            const pBotNear = alignRight ? polyNorm[2] : polyNorm[4];
+            [0.33, 0.66].forEach((f) => {
+                ctx.beginPath();
+                ctx.moveTo((pTopNear[0] + (pBotNear[0] - pTopNear[0]) * f) * W, (pTopNear[1] + (pBotNear[1] - pTopNear[1]) * f) * H);
+                ctx.lineTo((pTopFar[0] + (pBotFar[0] - pTopFar[0]) * f) * W, (pTopFar[1] + (pBotFar[1] - pTopFar[1]) * f) * H);
+                ctx.stroke();
+            });
+            ctx.setLineDash([]);
+        }
+
+        // Etiqueta compacta en esquina sin obstruir el pasillo
+        ctx.font = "bold 12px 'Space Grotesk', sans-serif";
+        const textW = ctx.measureText(label).width + 14;
+        const lx = alignRight ? (W - textW - 10) : 10;
+        const ly = (polyNorm[0][1] * H) + 8;
+        ctx.fillStyle = "rgba(12, 35, 64, 0.90)";
+        ctx.fillRect(lx, ly, textW, 22);
+        ctx.fillStyle = colorHex || "#FE5000";
+        ctx.fillRect(lx, ly, 4, 22);
+        ctx.fillStyle = "#FFFFFF";
+        ctx.fillText(label, lx + 9, ly + 15);
+        ctx.restore();
+    }
+
+    function dibujarPersonaTracked(ctx, W, H, p) {
+        const [nx1, ny1, nx2, ny2] = p.box;
+        const x1 = nx1 * W;
+        const y1 = ny1 * H;
+        const x2 = nx2 * W;
+        const y2 = ny2 * H;
+        const bw = Math.max(8, x2 - x1);
+        const bh = Math.max(12, y2 - y1);
+
+        const esCli = p.cliente !== false;
+        const enPercha = Boolean(p.percha);
+        const color = !esCli ? "#94A3B8" : (enPercha ? "#FE5000" : "#22C55E");
+
+        ctx.save();
+        // Escudo de privacidad anónima sobre zona facial (top 22% de la persona)
+        const headH = Math.max(14, bh * 0.22);
+        ctx.fillStyle = "rgba(12, 35, 64, 0.58)";
+        ctx.fillRect(x1 + 2, y1 + 2, bw - 4, headH);
+        ctx.fillStyle = "rgba(255, 255, 255, 0.85)";
+        ctx.font = "bold 9px 'JetBrains Mono', monospace";
+        ctx.fillText("ANÓNIMO", x1 + 6, y1 + Math.min(headH - 4, 14));
+
+        // Caja principal limpia con esquinas reforzadas
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 2.2;
+        ctx.strokeRect(x1, y1, bw, bh);
+
+        const corner = Math.min(14, bw * 0.25, bh * 0.2);
+        ctx.lineWidth = 3.5;
+        ctx.beginPath();
+        ctx.moveTo(x1, y1 + corner); ctx.lineTo(x1, y1); ctx.lineTo(x1 + corner, y1);
+        ctx.moveTo(x2 - corner, y1); ctx.lineTo(x2, y1); ctx.lineTo(x2, y1 + corner);
+        ctx.moveTo(x1, y2 - corner); ctx.lineTo(x1, y2); ctx.lineTo(x1 + corner, y2);
+        ctx.moveTo(x2 - corner, y2); ctx.lineTo(x2, y2); ctx.lineTo(x2, y2 - corner);
+        ctx.stroke();
+
+        // Vector direccional hacia percha si está mirando/alcanzando
+        if (p.gaze === "left" || p.gaze === "right") {
+            const gy = y1 + headH * 0.6;
+            const gxStart = p.gaze === "left" ? x1 : x2;
+            const gxEnd = p.gaze === "left" ? Math.max(4, x1 - 28) : Math.min(W - 4, x2 + 28);
+            ctx.strokeStyle = "#FACC15";
+            ctx.lineWidth = 2.5;
+            ctx.beginPath();
+            ctx.moveTo(gxStart, gy);
+            ctx.lineTo(gxEnd, gy);
+            ctx.stroke();
+        }
+
+        // Etiqueta superior con ID anónimo, postura y dwell en tiempo real
+        const dwellTxt = p.dwell > 0 ? ` (${p.dwell.toFixed(1)}s)` : "";
+        const tag = `${p.label} | ${p.postura}${dwellTxt}`;
+        ctx.font = "bold 11px 'JetBrains Mono', monospace";
+        const tw = ctx.measureText(tag).width + 12;
+        const tx = Math.min(W - tw - 4, Math.max(4, x1));
+        const ty = Math.max(4, y1 - 24);
+        ctx.fillStyle = !esCli ? "#475569" : (enPercha ? "#C23B00" : "#047857");
+        ctx.fillRect(tx, ty, tw, 20);
+        ctx.fillStyle = "#FFFFFF";
+        ctx.fillText(tag, tx + 6, ty + 14);
+        ctx.restore();
+    }
+
+    function iniciarBucleHudVideo() {
+        if (rafHudId !== null) return;
+        let ultimoSyncMapa = 0;
+
+        function tick(ts) {
+            rafHudId = window.requestAnimationFrame(tick);
+            if (document.hidden || moduloActivo !== "tab-vivo") return;
+
+            const canvas = document.getElementById("yolo-hud-canvas");
+            const videoEl = document.getElementById("demo-video-player");
+            const hudChip = document.getElementById("video-hud-telemetry");
+            if (!canvas) return;
+
+            const ctx = canvas.getContext("2d");
+            const W = canvas.width;
+            const H = canvas.height;
+            ctx.clearRect(0, 0, W, H);
+
+            // Modo A: Video HTML5 sincronizado cuadro a cuadro con detecciones reales YOLOv8n
+            if (videoEl && demoTracks && Array.isArray(demoTracks.frames) && demoTracks.frames.length > 0) {
+                const shelves = demoTracks.shelves || [];
+                shelves.forEach((sh) => {
+                    dibujarPoligonoPercha(
+                        ctx, W, H, sh.poly,
+                        `${sh.id} • ${sh.categoria}`,
+                        sh.color,
+                        sh.label_align === "right"
+                    );
+                });
+
+                const fps = demoTracks.fps || 24;
+                const total = demoTracks.frames.length;
+                const fIdx = Math.floor((videoEl.currentTime || 0) * fps) % total;
+                const frameObj = demoTracks.frames[Math.max(0, fIdx)] || { p: [] };
+                const personas = frameObj.p || [];
+                liveVideoPersonas = personas;
+
+                personas.forEach((p) => dibujarPersonaTracked(ctx, W, H, p));
+
+                const nCli = personas.filter((p) => p.cliente).length;
+                const nStaff = personas.length - nCli;
+                if (hudChip) {
+                    hudChip.textContent = `YOLOv8n • ${nCli} clientes • ${nStaff} staff • ${(videoEl.currentTime || 0).toFixed(1)}s`;
+                }
+
+                // Sincronizar personas del video sobre el mapa arquitectónico cada 250ms
+                if (ultimoEstadoMapa && ts - ultimoSyncMapa >= 250) {
+                    ultimoSyncMapa = ts;
+                    dibujarPlanoTienda2D(ultimoEstadoMapa);
+                }
+                return;
+            }
+
+            // Modo B: Stream procesado MJPEG o archivo subido (/api/live_events)
+            if (liveTelemetriaBackend) {
+                (liveTelemetriaBackend.perchas_roi || []).forEach((po) => {
+                    if (po.poly_norm) {
+                        dibujarPoligonoPercha(ctx, W, H, po.poly_norm, `${po.id} • ${po.categoria || ""}`, po.color || "#FE5000", po.id === "PER-A2");
+                    }
+                });
+                (liveTelemetriaBackend.personas_box || []).forEach((pb) => {
+                    const [x1, y1, x2, y2] = pb.box || [0, 0, 0, 0];
+                    dibujarPersonaTracked(ctx, W, H, {
+                        label: pb.etiqueta || `CLI-${pb.id}`,
+                        cliente: pb.es_cliente_valido !== false,
+                        box: [x1 / 480, y1 / 360, x2 / 480, y2 / 360],
+                        percha: pb.percha_id,
+                        postura: pb.postura_cabeza || "En escena",
+                        dwell: pb.dwell || 0,
+                        gaze: null,
+                    });
+                });
+                if (hudChip) {
+                    hudChip.textContent = `YOLOv8n Live • ${(liveTelemetriaBackend.personas_box || []).length} personas • ${liveTelemetriaBackend.fps_yolo || 0} FPS`;
+                }
+            }
+        }
+
+        rafHudId = window.requestAnimationFrame(tick);
+    }
+
+    // Telemetría viva y auditoría (capada a 50 filas)
     async function sincronizarTelemetriaBackend() {
-        if (document.hidden || enVuelo.live) return;
-        enVuelo.live = true;
+        if (document.hidden) return;
         try {
             const res = await fetch("/api/live_events");
             if (!res.ok) return;
             const data = await res.json();
+            liveTelemetriaBackend = data;
 
             const estadoEl = document.getElementById("estado-sistema-texto");
             if (estadoEl) {
-                if (data.simulacion_activa) estadoEl.textContent = "Gemelo 2D activo";
+                if (data.simulacion_activa) estadoEl.textContent = "Trackeo + Gemelo 2D";
                 else if (data.estado === "en_vivo") estadoEl.textContent = "Cámara en vivo";
-                else estadoEl.textContent = "En espera";
+                else estadoEl.textContent = "Sistema activo";
             }
 
             const sesionEl = document.getElementById("stat-live-sesion");
-            if (sesionEl) sesionEl.textContent = `Sesión viva: ${data.personas_activas || 0} activos`;
+            const liveCount = Math.max(data.personas_activas || 0, liveVideoPersonas.filter((p) => p.cliente).length);
+            if (sesionEl) sesionEl.textContent = `Sesión viva: ${liveCount} activos`;
 
             const sesTom = document.getElementById("stat-sesion-tomados");
             const sesDev = document.getElementById("stat-sesion-devueltos");
             if (sesTom) sesTom.textContent = String(data.agarrados || 0);
             if (sesDev) sesDev.textContent = String(data.devueltos || 0);
-
-            dibujarHudSobreVideo(data);
 
             const logBody = document.getElementById("yolo-event-log-body");
             const eventos = Array.isArray(data.eventos) ? data.eventos : [];
@@ -522,38 +1341,16 @@
             }
         } catch (_e) {
             // Silencioso
-        } finally {
-            enVuelo.live = false;
         }
-    }
-
-    function dibujarHudSobreVideo(data) {
-        const canvas = document.getElementById("yolo-hud-canvas");
-        if (!canvas || moduloActivo !== "tab-vivo") return;
-        const ctx = canvas.getContext("2d");
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-        (data.perchas_roi || []).forEach((po) => {
-            const [x1, y1, x2, y2] = po.box || [0, 0, 0, 0];
-            ctx.strokeStyle = "#FE5000";
-            ctx.lineWidth = 1.5;
-            ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
-            ctx.fillStyle = "rgba(12, 35, 64, 0.85)";
-            ctx.fillRect(x1, Math.max(0, y1 - 18), 140, 18);
-            ctx.fillStyle = "#FFFFFF";
-            ctx.font = "bold 10px 'Space Grotesk', sans-serif";
-            ctx.fillText(`${po.id}: ${po.categoria || ""}`, x1 + 4, Math.max(12, y1 - 5));
-        });
     }
 
     // KPIs Históricos (Fuente Única: /api/stats)
     async function actualizarDatosDashboard() {
-        if (enVuelo.stats) return;
-        enVuelo.stats = true;
         try {
-            const res = await fetch(`/api/stats?${construirQueryTemporal()}`);
-            if (!res.ok) return;
+            const { res, seq } = await fetchCancelable("stats", `/api/stats?${construirQueryTemporal()}`);
+            if (!res.ok || seq !== reqSeq.stats) return;
             const d = await res.json();
+            if (seq !== reqSeq.stats) return;
 
             const traf = Number(d.trafico || 0);
             const tom = Number(d.tomados || 0);
@@ -577,19 +1374,16 @@
             if (barWrap) barWrap.setAttribute("aria-valuenow", String(Math.round(conv)));
         } catch (_e) {
             // Silencioso
-        } finally {
-            enVuelo.stats = false;
         }
     }
 
-    // Resumen Ejecutivo de Publicidad y Promociones
+    // Resumen Ejecutivo de Publicidad, Comportamiento Visual, Zonas y Productos
     async function cargarResumenEjecutivoPublicidad() {
-        if (enVuelo.pub) return;
-        enVuelo.pub = true;
         try {
-            const res = await fetch(`/api/analytics/resumen_publicidad?${construirQueryTemporal()}`);
-            if (!res.ok) return;
+            const { res, seq } = await fetchCancelable("pub", `/api/analytics/resumen_publicidad?${construirQueryTemporal()}`);
+            if (!res.ok || seq !== reqSeq.pub) return;
             const d = await res.json();
+            if (seq !== reqSeq.pub) return;
 
             const priv = d.privacidad || {};
             const privEl = document.getElementById("exec-privacidad-resumen");
@@ -644,6 +1438,35 @@
             renderZonas("lista-zonas-calientes", d.zonas_calientes);
             renderZonas("lista-zonas-frias", d.zonas_frias);
 
+            // Productos más llevados y mayor indecisión
+            const renderProdResumen = (idLista, items, keyVal, sufijo) => {
+                const ul = document.getElementById(idLista);
+                if (!ul) return;
+                ul.textContent = "";
+                const filtrados = (items || []).filter((it) => Number(it[keyVal] || 0) > 0);
+                if (filtrados.length === 0) {
+                    const li = document.createElement("li");
+                    li.className = "text-kovaq-slate";
+                    li.textContent = "Sin movimientos en el rango filtrado.";
+                    ul.appendChild(li);
+                    return;
+                }
+                filtrados.slice(0, 4).forEach((it) => {
+                    const li = document.createElement("li");
+                    li.className = "flex items-center justify-between gap-2";
+                    const nom = document.createElement("span");
+                    nom.className = "font-bold";
+                    nom.textContent = `${it.nombre} (${it.percha_id})`;
+                    const cnt = document.createElement("span");
+                    cnt.className = "font-mono-num text-kovaq-slate shrink-0";
+                    cnt.textContent = `${it[keyVal]} ${sufijo}`;
+                    li.append(nom, cnt);
+                    ul.appendChild(li);
+                });
+            };
+            renderProdResumen("lista-productos-llevados", d.productos_mas_llevados, "llevados_netos", "llevados");
+            renderProdResumen("lista-productos-indecision", d.productos_cambio_ultimo_momento, "devueltos", "devueltos");
+
             const aiResumen = document.getElementById("motor-ai-resumen-texto");
             if (aiResumen && d.motor_marketing_ai?.resumen_ejecutivo) {
                 aiResumen.textContent = d.motor_marketing_ai.resumen_ejecutivo;
@@ -658,7 +1481,7 @@
                     const td = document.createElement("td");
                     td.colSpan = 4;
                     td.className = "p-6 text-center text-kovaq-slate";
-                    td.textContent = "No hay promociones registradas. Crea una en la pestaña Configuración.";
+                    td.textContent = "No hay promociones registradas para esta sucursal. Crea una en Configuración.";
                     tr.appendChild(td);
                     tbodyPromos.appendChild(tr);
                 } else {
@@ -701,24 +1524,33 @@
             }
         } catch (_e) {
             // Silencioso
-        } finally {
-            enVuelo.pub = false;
         }
     }
 
-    // Gráficos Chart.js actualizados en sitio (sin destroy/new cada tick)
+    // Gráficos Chart.js + Perfiles + Top Productos (enlazados a horas, días, semanas, meses y sucursal)
     async function cargarHeatmaps() {
-        if (enVuelo.heat || typeof Chart === "undefined") return;
-        enVuelo.heat = true;
+        if (typeof Chart === "undefined") return;
+        if (controllers.heat) {
+            try { controllers.heat.abort(); } catch (_e) { /* ignore */ }
+        }
+        const ctrl = new AbortController();
+        controllers.heat = ctrl;
+        reqSeq.heat += 1;
+        const mySeq = reqSeq.heat;
+
         const qBase = construirQueryTemporal();
         const qSerie = construirQueryTemporal({ agrupacion: filtroTemporal.agrupacion || "semana" });
         try {
-            const [resHora, resMatriz, resFranjas, resSerie] = await Promise.all([
-                fetch(`/api/analytics/heatmap/hora?${qBase}`),
-                fetch(`/api/analytics/heatmap/matriz?${qBase}`),
-                fetch(`/api/analytics/horarios/franjas?${qBase}`),
-                fetch(`/api/analytics/serie_temporal?${qSerie}`),
+            const [resHora, resMatriz, resFranjas, resSerie, resPerfiles, resTop] = await Promise.all([
+                fetch(`/api/analytics/heatmap/hora?${qBase}`, { signal: ctrl.signal }),
+                fetch(`/api/analytics/heatmap/matriz?${qBase}`, { signal: ctrl.signal }),
+                fetch(`/api/analytics/horarios/franjas?${qBase}`, { signal: ctrl.signal }),
+                fetch(`/api/analytics/serie_temporal?${qSerie}`, { signal: ctrl.signal }),
+                fetch(`/api/analytics/perfiles?${qBase}`, { signal: ctrl.signal }),
+                fetch(`/api/analytics/productos/top?limite=6&${qBase}`, { signal: ctrl.signal }),
             ]);
+            if (mySeq !== reqSeq.heat) return;
+
             if (resSerie.ok) renderGraficoSerieTemporal(await resSerie.json());
             if (resHora.ok) {
                 const dh = await resHora.json();
@@ -734,11 +1566,75 @@
                 actualizarInsightsMatriz(datosMatrizGlobal);
                 renderizarMatrizSegunModo(datosMatrizGlobal);
             }
+            if (resPerfiles.ok) renderPerfilesPermanencia((await resPerfiles.json()).perfiles || []);
+            if (resTop.ok) renderTopProductosAnalitica((await resTop.json()).productos || []);
         } catch (_e) {
-            // Silencioso
-        } finally {
-            enVuelo.heat = false;
+            // Silencioso en abort
         }
+    }
+
+    function renderPerfilesPermanencia(perfiles) {
+        const cont = document.getElementById("lista-perfiles-permanencia");
+        if (!cont) return;
+        cont.textContent = "";
+        if (!perfiles || perfiles.length === 0) {
+            const p = document.createElement("p");
+            p.className = "text-kovaq-slate m-0";
+            p.textContent = "Sin registros de permanencia en este rango.";
+            cont.appendChild(p);
+            return;
+        }
+        perfiles.forEach((pf) => {
+            const card = document.createElement("div");
+            card.className = "bg-slate-50 border border-kovaq-border rounded-xl p-3";
+            const tit = document.createElement("strong");
+            tit.className = "block text-kovaq-navy font-bold";
+            tit.textContent = pf.tipo;
+            const val = document.createElement("span");
+            val.className = "block text-xl font-extrabold font-mono-num text-kovaq-orange mt-1";
+            val.textContent = `${pf.cantidad} visitas`;
+            const sub = document.createElement("span");
+            sub.className = "block text-kovaq-slate";
+            sub.textContent = `${pf.promedio_seg} s promedio`;
+            card.append(tit, val, sub);
+            cont.appendChild(card);
+        });
+    }
+
+    function renderTopProductosAnalitica(productos) {
+        const cont = document.getElementById("lista-top-productos-analitica");
+        if (!cont) return;
+        cont.textContent = "";
+        if (!productos || productos.length === 0) {
+            const p = document.createElement("p");
+            p.className = "text-kovaq-slate m-0";
+            p.textContent = "Sin interacciones de productos en el rango seleccionado.";
+            cont.appendChild(p);
+            return;
+        }
+        const maxVal = Math.max(1, ...productos.map((p) => Number(p.interacciones || 0)));
+        productos.forEach((pr) => {
+            const row = document.createElement("div");
+            row.className = "space-y-1";
+            const head = document.createElement("div");
+            head.className = "flex items-center justify-between gap-2";
+            const nom = document.createElement("span");
+            nom.className = "font-bold text-kovaq-navy truncate";
+            nom.textContent = String(pr.nombre || "").replace(/\s*\(VEC-[^)]+\)/g, "");
+            const cnt = document.createElement("span");
+            cnt.className = "font-mono-num font-bold text-kovaq-orange shrink-0";
+            cnt.textContent = `${pr.interacciones} tomas`;
+            head.append(nom, cnt);
+
+            const track = document.createElement("div");
+            track.className = "w-full bg-slate-200 rounded-full h-2";
+            const fill = document.createElement("div");
+            fill.className = "bg-kovaq-navy h-2 rounded-full";
+            fill.style.width = `${Math.max(8, Math.round((pr.interacciones / maxVal) * 100))}%`;
+            track.appendChild(fill);
+            row.append(head, track);
+            cont.appendChild(row);
+        });
     }
 
     function renderGraficoSerieTemporal(ds) {
@@ -939,12 +1835,14 @@
         cont.appendChild(table);
     }
 
-    // Inventario y Planograma (DOM seguro sin XSS ni SyntaxError en comillas)
+    // Inventario y Planograma
     async function cargarInventarioReal() {
         try {
-            const res = await fetch(`/api/analytics/inventario?${construirQueryTemporal()}`);
-            if (!res.ok) return;
+            const { res, seq } = await fetchCancelable("inv", `/api/analytics/inventario?${construirQueryTemporal()}`);
+            if (!res.ok || seq !== reqSeq.inv) return;
             const data = await res.json();
+            if (seq !== reqSeq.inv) return;
+
             const items = data.productos || [];
             const tbody = document.getElementById("tabla-inventario-body");
             if (!tbody) return;
@@ -955,7 +1853,7 @@
                 const td = document.createElement("td");
                 td.colSpan = 7;
                 td.className = "p-6 text-center text-kovaq-slate";
-                td.textContent = "No hay productos en el planograma. Registra una percha en Configuración.";
+                td.textContent = "No hay productos en el planograma de esta sucursal.";
                 tr.appendChild(td);
                 tbody.appendChild(tr);
                 filtrarInventarioLocal();
@@ -965,7 +1863,7 @@
             items.forEach((p) => {
                 const tr = document.createElement("tr");
                 tr.className = "hover:bg-slate-50 item-inventario";
-                tr.dataset.nombre = `${p.nombre} ${p.categoria} ${p.percha_id}`.toLowerCase();
+                tr.dataset.nombre = `${p.nombre} ${p.categoria} ${p.percha_id} ${p.sucursal_id || ""}`.toLowerCase();
                 tr.dataset.categoria = p.categoria;
 
                 const tdProd = document.createElement("td");
@@ -975,7 +1873,7 @@
                 spNom.textContent = p.nombre;
                 const spSub = document.createElement("span");
                 spSub.className = "text-[11px] font-mono-num text-kovaq-slate";
-                spSub.textContent = `${p.percha_id} • ${p.nivel}`;
+                spSub.textContent = `${p.percha_id} • ${p.nivel} (${p.sucursal_id || "SUC-NORTE"})`;
                 tdProd.append(spNom, spSub);
 
                 const tdCat = document.createElement("td");
@@ -1000,7 +1898,7 @@
                 const tdEst = document.createElement("td");
                 tdEst.className = "p-3";
                 const spEst = document.createElement("span");
-                spEst.className = String(p.estado || "").includes("Crítico")
+                spEst.className = String(p.estado || "").includes("Crítico") || String(p.estado || "").includes("Indecisión")
                     ? "bg-red-100 text-red-900 px-2 py-0.5 rounded font-bold"
                     : "bg-emerald-100 text-emerald-900 px-2 py-0.5 rounded font-bold";
                 spEst.textContent = p.estado;
@@ -1042,12 +1940,35 @@
         if (lbl) lbl.textContent = `Mostrando ${visibles} de ${rows.length} productos del planograma.`;
     }
 
-    // Configuración (Cámaras, Planograma y Promociones) con DOM seguro
+    // Configuración (Sucursales, Cámaras, Planograma y Promociones)
     async function cargarConfiguracionMapa() {
+        const q = construirQueryTemporal();
         try {
-            const [resCams, resPerchas] = await Promise.all([fetch("/api/cameras"), fetch("/api/shelves")]);
-            if (resCams.ok) renderTablaCamaras((await resCams.json()).camaras || []);
-            if (resPerchas.ok) renderTablaPerchas((await resPerchas.json()).perchas || []);
+            const [resSuc, resCams, resPerchas] = await Promise.all([
+                fetch("/api/branches"),
+                fetch(`/api/cameras?sucursal_id=${encodeURIComponent(filtroTemporal.sucursal_id)}`),
+                fetch(`/api/shelves?${q}`),
+            ]);
+            if (resSuc.ok) renderTablaSucursales((await resSuc.json()).sucursales || []);
+            if (resCams.ok) {
+                const cams = (await resCams.json()).camaras || [];
+                renderTablaCamaras(cams);
+                actualizarSelectorCamaras(cams);
+            }
+            if (resPerchas.ok) {
+                const perchas = (await resPerchas.json()).perchas || [];
+                renderTablaPerchas(perchas);
+                const selPromoPercha = document.getElementById("promo-percha");
+                if (selPromoPercha && perchas.length > 0) {
+                    selPromoPercha.textContent = "";
+                    perchas.forEach((p) => {
+                        const o = document.createElement("option");
+                        o.value = p.id;
+                        o.textContent = `${p.id} • ${p.categoria}`;
+                        selPromoPercha.appendChild(o);
+                    });
+                }
+            }
         } catch (_e) {
             // Silencioso
         }
@@ -1136,7 +2057,7 @@
     }
 
     async function eliminarCamaraBackend(camId) {
-        const res = await fetch(`/api/cameras/${encodeURIComponent(camId)}`, { method: "DELETE" });
+        const res = await fetch(`/api/cameras/${encodeURIComponent(camId)}?sucursal_id=${encodeURIComponent(filtroTemporal.sucursal_id)}`, { method: "DELETE" });
         if (res.ok) {
             renderTablaCamaras((await res.json()).camaras || []);
             mostrarAviso("config-feedback-banner", `Cámara ${camId} eliminada del plano.`, "ok");
@@ -1146,7 +2067,7 @@
         }
     }
 
-    // Chat Kovaq Marketing AI (100% textContent)
+    // Chat Kovaq Marketing AI (100% textContent, enlazado a sucursal y período)
     function agregarBurbuja(autor, texto, tipo) {
         const cont = document.getElementById("chat-messages");
         if (!cont) return null;
@@ -1175,13 +2096,19 @@
         const btn = document.getElementById("chat-submit");
         agregarBurbuja("Tú", mensaje, "user");
         if (btn) btn.disabled = true;
-        const burbujaIA = agregarBurbuja("Kovaq Marketing AI", "Consultando métricas del período...", "bot");
+        const burbujaIA = agregarBurbuja("Kovaq Marketing AI", "Consultando métricas de la sucursal y período...", "bot");
 
         try {
             const res = await fetch("/api/chat", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ mensaje, modo }),
+                body: JSON.stringify({
+                    mensaje,
+                    modo,
+                    sucursal_id: filtroTemporal.sucursal_id,
+                    dias: filtroTemporal.dias || 30,
+                    horas: filtroTemporal.horas,
+                }),
             });
             const data = await res.json().catch(() => ({}));
             if (!res.ok) throw new Error(data.detail || "Error consultando IA");
@@ -1214,13 +2141,13 @@
         cont.textContent = "";
         const video = document.createElement("video");
         video.id = "demo-video-player";
-        video.width = 480;
-        video.height = 360;
-        video.preload = "metadata";
+        video.width = 960;
+        video.height = 540;
+        video.preload = "auto";
         video.loop = true;
         video.muted = true;
         video.playsInline = true;
-        video.className = "w-full h-full object-contain";
+        video.className = "w-full h-full";
         const src = document.createElement("source");
         src.src = "/static/demo_supermercado.mp4";
         src.type = "video/mp4";
@@ -1228,9 +2155,7 @@
         cont.appendChild(video);
 
         const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-        if (!reduceMotion) {
-            video.play().catch(() => {});
-        }
+        if (!reduceMotion) video.play().catch(() => {});
     }
 
     function mostrarStreamProcesado() {
@@ -1240,11 +2165,11 @@
         cont.textContent = "";
         const img = document.createElement("img");
         img.id = "live-stream-img";
-        img.width = 480;
-        img.height = 360;
+        img.width = 960;
+        img.height = 540;
         img.decoding = "async";
-        img.alt = "Transmisión procesada por KOVAQ con difuminado facial y zonas de percha";
-        img.className = "w-full h-full object-contain";
+        img.alt = "Transmisión procesada por KOVAQ con polígonos de percha y detección anónima";
+        img.className = "w-full h-full";
         img.src = `/api/video_feed?t=${Date.now()}`;
         img.addEventListener("error", () => mostrarVideoRespaldo());
         cont.appendChild(img);
@@ -1257,7 +2182,7 @@
 
         if (videoEl && window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
             videoEl.pause();
-            if (txtPlay) txtPlay.textContent = "Reproducir video";
+            if (txtPlay) txtPlay.textContent = "Reproducir";
             if (btnPlay) btnPlay.setAttribute("aria-pressed", "true");
         }
 
@@ -1267,11 +2192,11 @@
                 if (!v) return;
                 if (v.paused) {
                     v.play().catch(() => {});
-                    if (txtPlay) txtPlay.textContent = "Pausar video";
+                    if (txtPlay) txtPlay.textContent = "Pausar";
                     btnPlay.setAttribute("aria-pressed", "false");
                 } else {
                     v.pause();
-                    if (txtPlay) txtPlay.textContent = "Reproducir video";
+                    if (txtPlay) txtPlay.textContent = "Reproducir";
                     btnPlay.setAttribute("aria-pressed", "true");
                 }
             });
@@ -1300,7 +2225,7 @@
                 });
                 if (res.ok) {
                     const tit = document.getElementById("titulo-camara-activa");
-                    if (tit) tit.textContent = selCamMapa.options[selCamMapa.selectedIndex].text;
+                    if (tit) tit.textContent = selCamMapa.options[selCamMapa.selectedIndex]?.text || selCamMapa.value;
                     sincronizarMapa2D();
                 }
             });
@@ -1331,9 +2256,13 @@
                 mostrarAviso("global-status-banner", err.detail || "No se pudo cambiar la fuente.", "error");
                 return;
             }
-            const modo = document.body.dataset.modo || "local";
-            if (modo === "local") mostrarStreamProcesado();
-            else mostrarVideoRespaldo();
+            if (tipo === "video") {
+                mostrarVideoRespaldo();
+            } else {
+                const modo = document.body.dataset.modo || "local";
+                if (modo === "local") mostrarStreamProcesado();
+                else mostrarVideoRespaldo();
+            }
         }
 
         const btnConectar = document.getElementById("btn-conectar-fuente");
@@ -1379,7 +2308,7 @@
                     if (!res.ok) throw new Error(data.detail || "Error procesando archivo");
                     if (statusEl) statusEl.textContent = data.resumen || "Archivo analizado correctamente.";
                     mostrarStreamProcesado();
-                    await Promise.all([refrescarDashboardsPorPeriodo(), sincronizarMapa2D(), sincronizarTelemetriaBackend()]);
+                    await Promise.all([refrescarDashboardsPorPeriodo(), sincronizarTelemetriaBackend()]);
                 } catch (err) {
                     if (statusEl) statusEl.textContent = `Error: ${err.message}`;
                 } finally {
@@ -1390,7 +2319,6 @@
     }
 
     function inicializarFormulariosYControles() {
-        // Matriz franjas vs 24h
         const btnFranjas = document.getElementById("btn-vista-franjas");
         const btn24h = document.getElementById("btn-vista-24h");
         const toggleMatriz = (modo) => {
@@ -1410,7 +2338,7 @@
         if (btnFranjas) btnFranjas.addEventListener("click", () => toggleMatriz("franjas"));
         if (btn24h) btn24h.addEventListener("click", () => toggleMatriz("24h"));
 
-        // Inventario: búsqueda con debounce (150ms) + botones categoría
+        // Inventario: búsqueda con debounce + categoría
         const searchInv = document.getElementById("input-buscar-inventario");
         let debounceTimer = null;
         if (searchInv) {
@@ -1451,6 +2379,56 @@
             });
         });
 
+        // Nueva sucursal
+        const formSuc = document.getElementById("form-nueva-sucursal");
+        if (formSuc) {
+            formSuc.addEventListener("submit", async (ev) => {
+                ev.preventDefault();
+                const idVal = (document.getElementById("suc-id")?.value || "").trim().toUpperCase();
+                const res = await fetch("/api/branches", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        id: idVal || null,
+                        nombre: document.getElementById("suc-nombre").value.trim(),
+                        ciudad: document.getElementById("suc-ciudad").value.trim(),
+                        formato: document.getElementById("suc-formato").value,
+                        area_m2: 1200,
+                    }),
+                });
+                const data = await res.json().catch(() => ({}));
+                if (res.ok) {
+                    poblarSelectorSucursales(data.sucursales || []);
+                    renderTablaSucursales(data.sucursales || []);
+                    formSuc.reset();
+                    mostrarAviso("config-feedback-banner", `Sucursal ${data.sucursal_id} registrada correctamente.`, "ok");
+                } else {
+                    mostrarAviso("config-feedback-banner", data.detail || "No se pudo registrar la sucursal.", "error");
+                }
+            });
+        }
+
+        // Regenerar datos de simulación
+        const btnReseed = document.getElementById("btn-regenerar-simulacion");
+        if (btnReseed) {
+            btnReseed.addEventListener("click", async () => {
+                btnReseed.disabled = true;
+                mostrarAviso("config-feedback-banner", "Regenerando datos históricos y horarios de simulación...", "info");
+                try {
+                    const res = await fetch("/api/simulation/reseed", { method: "POST" });
+                    const data = await res.json().catch(() => ({}));
+                    if (res.ok) {
+                        mostrarAviso("config-feedback-banner", data.mensaje || "Datos de simulación actualizados.", "ok");
+                        await refrescarDashboardsPorPeriodo();
+                    } else {
+                        mostrarAviso("config-feedback-banner", data.detail || "No tienes permisos para regenerar simulación.", "error");
+                    }
+                } finally {
+                    btnReseed.disabled = false;
+                }
+            });
+        }
+
         // Formulario nueva cámara
         const formCam = document.getElementById("form-nueva-camara");
         if (formCam) {
@@ -1463,13 +2441,14 @@
                         nombre: document.getElementById("cam-nombre").value.trim(),
                         ruta: document.getElementById("cam-url").value.trim(),
                         estado: document.getElementById("cam-estado").value,
+                        sucursal_id: sucursalEfectivaEscritura(),
                     }),
                 });
                 const data = await res.json().catch(() => ({}));
                 if (res.ok) {
                     renderTablaCamaras(data.camaras || []);
                     formCam.reset();
-                    mostrarAviso("config-feedback-banner", "Cámara registrada correctamente en el plano 2D.", "ok");
+                    mostrarAviso("config-feedback-banner", "Cámara registrada correctamente en la sucursal.", "ok");
                     sincronizarMapa2D();
                 } else {
                     mostrarAviso("config-feedback-banner", data.detail || "No se pudo registrar la cámara.", "error");
@@ -1491,6 +2470,7 @@
                         titulo: document.getElementById("promo-titulo").value.trim(),
                         tipo_publicidad: document.getElementById("promo-tipo").value.trim(),
                         descuento_pct: parseInt(document.getElementById("promo-desc").value || "0", 10),
+                        sucursal_id: sucursalEfectivaEscritura(),
                     }),
                 });
                 const data = await res.json().catch(() => ({}));
@@ -1517,6 +2497,7 @@
                         nombre: document.getElementById("plano-nombre").value.trim(),
                         categoria: document.getElementById("plano-cat").value.trim(),
                         camara_id: document.getElementById("plano-cam").value,
+                        sucursal_id: sucursalEfectivaEscritura(),
                         niveles: [
                             { nivel: "Superior (Subir Cabeza)", y1: 0.18, y2: 0.42, producto: document.getElementById("plano-prod-sup").value.trim() },
                             { nivel: "Medio (Altura Ojos)", y1: 0.42, y2: 0.68, producto: document.getElementById("plano-prod-med").value.trim() },
@@ -1528,7 +2509,7 @@
                 if (res.ok) {
                     renderTablaPerchas(data.perchas || []);
                     formPlano.reset();
-                    mostrarAviso("config-feedback-banner", "Planograma actualizado en Turso.", "ok");
+                    mostrarAviso("config-feedback-banner", "Planograma actualizado en la sucursal.", "ok");
                     await Promise.all([cargarInventarioReal(), cargarResumenEjecutivoPublicidad(), sincronizarMapa2D()]);
                 } else {
                     mostrarAviso("config-feedback-banner", data.detail || "No se pudo guardar el planograma.", "error");
@@ -1537,38 +2518,32 @@
         }
     }
 
-    // Arranque diferido y polling controlado por visibilidad de pestaña
-    document.addEventListener("DOMContentLoaded", () => {
+    // Arranque y polling controlado por visibilidad
+    document.addEventListener("DOMContentLoaded", async () => {
         inicializarTabs();
-        inicializarFiltrosTemporales();
+        inicializarFiltrosTemporalesYSucursal();
+        inicializarInteraccionMapa();
         inicializarControlesVideoYSubida();
         inicializarFormulariosYControles();
         actualizarEtiquetasPeriodo();
 
-        // Solo cargar lo visible en Tab 1 al iniciar (Tabs 2-5 cargan bajo demanda)
-        sincronizarMapa2D();
-        sincronizarTelemetriaBackend();
-        actualizarDatosDashboard();
-        cargarResumenEjecutivoPublicidad();
+        await Promise.allSettled([cargarSucursales(), cargarDemoTracks()]);
+        iniciarBucleHudVideo();
+        await Promise.allSettled([
+            refrescarDashboardsPorPeriodo(),
+            sincronizarTelemetriaBackend(),
+        ]);
 
         setInterval(() => {
             if (!document.hidden && moduloActivo === "tab-vivo") {
-                sincronizarMapa2D();
                 sincronizarTelemetriaBackend();
             }
-        }, 3500);
+        }, 4000);
 
         setInterval(() => {
             if (!document.hidden) {
-                actualizarDatosDashboard();
-                cargarResumenEjecutivoPublicidad();
+                refrescarDashboardsPorPeriodo();
             }
-        }, 18000);
-
-        setInterval(() => {
-            if (!document.hidden && moduloActivo === "tab-percha") {
-                cargarHeatmaps();
-            }
-        }, 20000);
+        }, 25000);
     });
 })();

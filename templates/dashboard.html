@@ -16,51 +16,94 @@
                         Panel de Control y Analítica de Percha
                     </h1>
                     <p id="subtitulo-periodo-activo" class="text-xs sm:text-sm text-kovaq-slate mt-1 mb-0">
-                        Telemetría anónima por coordenadas 2D y datos históricos en Turso.
+                        Telemetría anónima por coordenadas 2D, mapa de calor y datos históricos por sucursal.
                     </p>
                 </div>
                 <div class="flex flex-wrap items-center gap-2">
-                    <span id="estado-sistema-badge" class="inline-flex items-center gap-1.5 bg-emerald-100 text-emerald-900 text-xs font-mono-num font-bold px-3 py-1 rounded-lg">
+                    <div class="flex items-center gap-2 bg-slate-50 border border-kovaq-control rounded-xl px-2.5 py-1">
+                        <i class="bi bi-building text-kovaq-orange" aria-hidden="true"></i>
+                        <label for="select-sucursal-global" class="text-xs font-bold text-kovaq-navy whitespace-nowrap">Sucursal:</label>
+                        <select id="select-sucursal-global" class="bg-transparent text-xs font-bold text-kovaq-navy focus:outline-none min-h-[32px] pr-2">
+                            <option value="SUC-NORTE">Matriz Norte • Quito</option>
+                            <option value="SUC-CENTRO">Plaza Centro • Guayaquil</option>
+                            <option value="SUC-SUR">Hiper Sur • Cuenca</option>
+                            <option value="todas">Todas las sucursales (Consolidado)</option>
+                        </select>
+                    </div>
+                    <span id="estado-sistema-badge" class="inline-flex items-center gap-1.5 bg-emerald-100 text-emerald-900 text-xs font-mono-num font-bold px-3 py-1.5 rounded-lg">
                         <i class="bi bi-broadcast" aria-hidden="true"></i>
                         <span id="estado-sistema-texto">Sistema activo</span>
                     </span>
-                    <span id="badge-rango-fechas" class="inline-flex items-center gap-1.5 bg-orange-50 text-kovaq-orange border border-orange-200 text-xs font-mono-num font-bold px-3 py-1 rounded-lg">
-                        Últimos 30 días (Semanal)
+                    <span id="badge-rango-fechas" class="inline-flex items-center gap-1.5 bg-orange-50 text-kovaq-orange border border-orange-200 text-xs font-mono-num font-bold px-3 py-1.5 rounded-lg">
+                        Últimos 30 días (Semana)
                     </span>
                 </div>
             </div>
 
-            <!-- Barra global de selección temporal (días, semanas, meses y rango libre) -->
-            <div class="w-full flex flex-wrap items-center justify-between gap-3 bg-slate-50 border border-kovaq-border p-3 rounded-xl">
-                <div class="flex flex-wrap items-center gap-2" role="group" aria-label="Ventana de análisis histórico">
-                    <span class="text-xs font-title font-bold text-kovaq-navy flex items-center gap-1.5">
-                        <i class="bi bi-calendar3 text-kovaq-orange" aria-hidden="true"></i>
-                        Análisis histórico:
-                    </span>
-                    <div class="flex flex-wrap items-center gap-1.5">
-                        <button type="button" id="btn-periodo-dia" data-agrup="dia" data-dias="1" aria-pressed="false" class="btn-periodo-preset min-h-[36px] px-3 py-1 rounded-lg text-xs font-bold border border-kovaq-control bg-white text-kovaq-navy">
-                            Hoy (1d)
-                        </button>
-                        <button type="button" id="btn-periodo-semana" data-agrup="dia" data-dias="7" aria-pressed="false" class="btn-periodo-preset min-h-[36px] px-3 py-1 rounded-lg text-xs font-bold border border-kovaq-control bg-white text-kovaq-navy">
-                            7 Días
-                        </button>
-                        <button type="button" id="btn-periodo-mes" data-agrup="semana" data-dias="30" aria-pressed="true" class="btn-periodo-preset min-h-[36px] px-3 py-1 rounded-lg text-xs font-bold border border-kovaq-navy bg-kovaq-navy text-white">
-                            30 Días (Semanal)
-                        </button>
-                        <button type="button" id="btn-periodo-trimestre" data-agrup="mes" data-dias="90" aria-pressed="false" class="btn-periodo-preset min-h-[36px] px-3 py-1 rounded-lg text-xs font-bold border border-kovaq-control bg-white text-kovaq-navy">
-                            90 Días (Mensual)
-                        </button>
+            <!-- Barra global de selección temporal: horas, días, semanas, meses, franja horaria y fechas -->
+            <div class="w-full flex flex-col gap-3 bg-slate-50 border border-kovaq-border p-3.5 rounded-xl">
+                <div class="flex flex-wrap items-center justify-between gap-3">
+                    <div class="flex flex-wrap items-center gap-2" role="group" aria-label="Ventana de análisis histórico">
+                        <span class="text-xs font-title font-bold text-kovaq-navy flex items-center gap-1.5">
+                            <i class="bi bi-clock-history text-kovaq-orange" aria-hidden="true"></i>
+                            Período:
+                        </span>
+                        <div class="flex flex-wrap items-center gap-1.5">
+                            <button type="button" id="btn-periodo-1h" data-agrup="hora" data-horas="1" aria-pressed="false" class="btn-periodo-preset min-h-[36px] px-3 py-1 rounded-lg text-xs font-bold border border-kovaq-control bg-white text-kovaq-navy">
+                                Última 1h
+                            </button>
+                            <button type="button" id="btn-periodo-6h" data-agrup="hora" data-horas="6" aria-pressed="false" class="btn-periodo-preset min-h-[36px] px-3 py-1 rounded-lg text-xs font-bold border border-kovaq-control bg-white text-kovaq-navy">
+                                6 Horas
+                            </button>
+                            <button type="button" id="btn-periodo-dia" data-agrup="hora" data-horas="24" aria-pressed="false" class="btn-periodo-preset min-h-[36px] px-3 py-1 rounded-lg text-xs font-bold border border-kovaq-control bg-white text-kovaq-navy">
+                                Hoy (24h)
+                            </button>
+                            <button type="button" id="btn-periodo-semana" data-agrup="dia" data-dias="7" aria-pressed="false" class="btn-periodo-preset min-h-[36px] px-3 py-1 rounded-lg text-xs font-bold border border-kovaq-control bg-white text-kovaq-navy">
+                                7 Días
+                            </button>
+                            <button type="button" id="btn-periodo-mes" data-agrup="semana" data-dias="30" aria-pressed="true" class="btn-periodo-preset min-h-[36px] px-3 py-1 rounded-lg text-xs font-bold border border-kovaq-navy bg-kovaq-navy text-white">
+                                30 Días
+                            </button>
+                            <button type="button" id="btn-periodo-trimestre" data-agrup="mes" data-dias="90" aria-pressed="false" class="btn-periodo-preset min-h-[36px] px-3 py-1 rounded-lg text-xs font-bold border border-kovaq-control bg-white text-kovaq-navy">
+                                90 Días
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="flex flex-wrap items-center gap-2 text-xs">
+                        <label for="filtro-hora-inicio" class="font-bold text-kovaq-navy">Horas:</label>
+                        <select id="filtro-hora-inicio" class="kovaq-select min-h-[36px] py-1 px-2 text-xs font-mono-num" aria-label="Hora de inicio">
+                            <option value="">Desde 00:00</option>
+                            {% for h in range(24) %}
+                            <option value="{{ h }}">{{ "%02d:00"|format(h) }}</option>
+                            {% endfor %}
+                        </select>
+                        <span class="text-kovaq-slate font-bold">a</span>
+                        <select id="filtro-hora-fin" class="kovaq-select min-h-[36px] py-1 px-2 text-xs font-mono-num" aria-label="Hora de fin">
+                            <option value="">Hasta 23:59</option>
+                            {% for h in range(24) %}
+                            <option value="{{ h }}">{{ "%02d:59"|format(h) }}</option>
+                            {% endfor %}
+                        </select>
                     </div>
                 </div>
 
-                <div class="flex flex-wrap items-center gap-2 text-xs">
-                    <label for="filtro-fecha-inicio" class="font-bold text-kovaq-navy">Desde</label>
-                    <input type="date" id="filtro-fecha-inicio" class="kovaq-input min-h-[36px] py-1 px-2 text-xs font-mono-num">
-                    <label for="filtro-fecha-fin" class="font-bold text-kovaq-navy">Hasta</label>
-                    <input type="date" id="filtro-fecha-fin" class="kovaq-input min-h-[36px] py-1 px-2 text-xs font-mono-num">
-                    <button type="button" id="btn-aplicar-rango" class="btn-kovaq-outline min-h-[36px] text-xs">
-                        Filtrar fechas
-                    </button>
+                <div class="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-kovaq-border text-xs">
+                    <div class="flex flex-wrap items-center gap-2">
+                        <label for="filtro-fecha-inicio" class="font-bold text-kovaq-navy">Desde fecha</label>
+                        <input type="date" id="filtro-fecha-inicio" class="kovaq-input min-h-[36px] py-1 px-2 text-xs font-mono-num">
+                        <label for="filtro-fecha-fin" class="font-bold text-kovaq-navy">Hasta fecha</label>
+                        <input type="date" id="filtro-fecha-fin" class="kovaq-input min-h-[36px] py-1 px-2 text-xs font-mono-num">
+                        <button type="button" id="btn-aplicar-rango" class="btn-kovaq-primary min-h-[36px] text-xs px-3.5">
+                            Aplicar filtro
+                        </button>
+                        <button type="button" id="btn-limpiar-filtros" class="btn-kovaq-outline min-h-[36px] text-xs">
+                            Limpiar
+                        </button>
+                    </div>
+                    <span id="indicador-carga-datos" role="status" aria-live="polite" class="text-xs font-mono-num font-bold text-kovaq-slate">
+                        Sincronizado
+                    </span>
                 </div>
             </div>
             <div id="global-status-banner" role="status" aria-live="polite" class="hidden text-xs font-semibold px-3 py-2 rounded-lg border"></div>
@@ -91,63 +134,72 @@
         </button>
     </div>
 
-    <!-- Módulo 1: Vista en vivo y plano topológico 2D -->
+    <!-- Módulo 1: Vista en vivo y plano arquitectónico 2D con mapa de calor enlazado -->
     <section id="tab-vivo" role="tabpanel" aria-labelledby="btn-tab-vivo" class="module-pane active space-y-6">
-        <h2 class="sr-only">Vista en vivo, plano 2D de la tienda e indicadores del período</h2>
+        <h2 class="sr-only">Vista en vivo, mapa arquitectónico de calor e indicadores del período</h2>
 
-        <!-- Bloque Principal: Plano Topológico 2D (elemento firma) + Reproductor HUD -->
         <div class="grid grid-cols-1 xl:grid-cols-12 gap-6">
-            <div class="xl:col-span-7 card-kovaq p-5 flex flex-col justify-between gap-4">
-                <div class="flex flex-wrap items-center justify-between gap-3">
+            <!-- Plano Arquitectónico Real + Mapa de Calor Enlazado a Período y Sucursal -->
+            <div class="xl:col-span-7 card-kovaq p-5 flex flex-col justify-between gap-3">
+                <div class="flex flex-wrap items-start justify-between gap-3">
                     <div>
                         <h3 class="text-base sm:text-lg font-extrabold text-kovaq-navy font-title m-0 flex items-center gap-2">
                             <i class="bi bi-map text-kovaq-orange" aria-hidden="true"></i>
-                            Plano Topológico 2D y Zonas Calientes / Frías
+                            <span id="titulo-plano-sucursal">Mapa de Infraestructura y Zonas Calientes / Frías</span>
                         </h3>
-                        <p class="text-xs text-kovaq-slate mt-0.5 mb-0">
-                            Coordenadas anónimas Puerta a Caja (personal de tienda excluido del conteo comercial).
+                        <p id="subtitulo-plano-arquitectura" class="text-xs text-kovaq-slate mt-0.5 mb-0">
+                            Planta arquitectónica real con cámaras, cajas, accesos y mapa de calor sincronizado al período activo.
                         </p>
                     </div>
-                    <button type="button" id="btn-toggle-sim" class="btn-kovaq-outline text-xs min-h-[38px]">
-                        <i class="bi bi-pause-circle" aria-hidden="true"></i>
-                        <span id="txt-toggle-sim">Pausar simulación</span>
-                    </button>
+                    <div class="flex flex-wrap items-center gap-1.5">
+                        <button type="button" id="btn-capa-calor" aria-pressed="true" class="map-layer-pill active">Calor</button>
+                        <button type="button" id="btn-capa-fov" aria-pressed="true" class="map-layer-pill active">Cámaras FOV</button>
+                        <button type="button" id="btn-capa-vectores" aria-pressed="true" class="map-layer-pill active">Vectores</button>
+                        <button type="button" id="btn-toggle-sim" class="btn-kovaq-outline text-xs min-h-[32px] px-2.5">
+                            <i class="bi bi-pause-circle" aria-hidden="true"></i>
+                            <span id="txt-toggle-sim">Pausar</span>
+                        </button>
+                    </div>
                 </div>
 
                 <div class="map-stage-container">
-                    <canvas id="store-map-canvas" width="920" height="360" role="img" aria-label="Plano 2D de la tienda con 3 cámaras, 5 perchas, zonas calientes y trayectorias anónimas de clientes." class="w-full h-full block"></canvas>
+                    <canvas id="store-map-canvas" width="960" height="480" role="img" aria-label="Mapa arquitectónico 2D con infraestructura real, cámaras CCTV, góndolas y mapa de calor del período seleccionado." class="w-full h-full block"></canvas>
+                    <div id="map-tooltip" class="hidden absolute z-20 pointer-events-none bg-[#0C2340] text-white text-xs rounded-lg px-3 py-2 shadow-lg max-w-[240px]"></div>
                 </div>
 
                 <div class="flex flex-wrap items-center justify-between gap-3 text-xs text-kovaq-slate border-t border-kovaq-border pt-3">
                     <div class="flex flex-wrap items-center gap-3">
-                        <span class="inline-flex items-center gap-1.5 font-semibold text-kovaq-navy">
-                            <i class="bi bi-square-fill text-[#FE5000]" aria-hidden="true"></i> Zona caliente
+                        <span class="inline-flex items-center gap-2 font-semibold text-kovaq-navy">
+                            <span>Fría</span>
+                            <span class="thermal-legend-bar inline-block" aria-hidden="true"></span>
+                            <span>Caliente</span>
                         </span>
                         <span class="inline-flex items-center gap-1.5 font-semibold text-kovaq-navy">
-                            <i class="bi bi-square-fill text-blue-600" aria-hidden="true"></i> Zona fría
+                            <i class="bi bi-camera-video-fill text-kovaq-orange" aria-hidden="true"></i> Cámara CCTV
                         </span>
                         <span class="inline-flex items-center gap-1.5 font-semibold text-kovaq-navy">
-                            <i class="bi bi-circle-fill text-emerald-600" aria-hidden="true"></i> Cliente Puerta a Caja
+                            <i class="bi bi-circle-fill text-emerald-600" aria-hidden="true"></i> Cliente
                         </span>
                         <span class="inline-flex items-center gap-1.5 font-semibold text-kovaq-navy">
-                            <i class="bi bi-diamond-fill text-slate-500" aria-hidden="true"></i> Personal excluido
+                            <i class="bi bi-diamond-fill text-slate-500" aria-hidden="true"></i> Personal
                         </span>
                     </div>
-                    <span class="font-mono-num font-bold text-kovaq-navy" id="map-handoff-counter">0 handoffs activos</span>
+                    <span class="font-mono-num font-bold text-kovaq-navy" id="map-handoff-counter">0 muestras térmicas</span>
                 </div>
             </div>
 
-            <div class="xl:col-span-5 card-kovaq p-5 flex flex-col justify-between gap-4">
+            <!-- Visor de Video con Trackeo Real YOLOv8n + Polígonos en Perspectiva -->
+            <div class="xl:col-span-5 card-kovaq p-5 flex flex-col justify-between gap-3">
                 <div class="flex flex-wrap items-center justify-between gap-2">
                     <div>
                         <h3 class="text-base sm:text-lg font-extrabold text-kovaq-navy font-title m-0" id="titulo-camara-activa">
                             Cámara 12 • Pasillo Central
                         </h3>
-                        <p class="text-xs text-kovaq-slate m-0">Difuminado facial automático y detección de postura en percha.</p>
+                        <p class="text-xs text-kovaq-slate m-0">Polígonos en perspectiva por percha y seguimiento anónimo de personas en tiempo real.</p>
                     </div>
-                    <button type="button" id="btn-toggle-video-play" class="btn-kovaq-outline text-xs min-h-[38px]" aria-pressed="false">
+                    <button type="button" id="btn-toggle-video-play" class="btn-kovaq-outline text-xs min-h-[36px]" aria-pressed="false">
                         <i class="bi bi-pause-fill" aria-hidden="true"></i>
-                        <span id="txt-toggle-video-play">Pausar video</span>
+                        <span id="txt-toggle-video-play">Pausar</span>
                     </button>
                 </div>
 
@@ -185,15 +237,17 @@
 
                 <div class="hud-stage">
                     <div id="video-container" class="w-full h-full flex items-center justify-center relative">
-                        <video id="demo-video-player" width="480" height="360" preload="metadata" autoplay loop muted playsinline class="w-full h-full object-contain">
+                        <video id="demo-video-player" width="960" height="540" preload="auto" autoplay loop muted playsinline class="w-full h-full">
                             <source src="/static/demo_supermercado.mp4" type="video/mp4">
                         </video>
                     </div>
-                    <canvas id="yolo-hud-canvas" width="480" height="360" aria-hidden="true" class="absolute inset-0 w-full h-full z-10"></canvas>
+                    <canvas id="yolo-hud-canvas" width="960" height="540" aria-hidden="true" class="absolute inset-0 w-full h-full z-10"></canvas>
+                    <div id="video-hud-telemetry" class="absolute bottom-2 left-2 z-20 bg-[#0C2340]/90 text-white text-[11px] font-mono-num font-bold px-2.5 py-1 rounded-md">
+                        YOLOv8n • Iniciando trackeo...
+                    </div>
                     <div id="feed-loading-toast" role="status" aria-live="polite" class="hidden absolute top-3 left-3 z-20 bg-kovaq-navy text-white text-xs font-bold px-3 py-1.5 rounded-lg"></div>
                 </div>
 
-                <!-- Subida con análisis instantáneo -->
                 <div class="bg-slate-50 border border-kovaq-border rounded-xl p-3 flex flex-col gap-2">
                     <div class="flex flex-wrap items-center justify-between gap-2">
                         <label for="archivo-input" class="text-xs font-bold text-kovaq-navy">
@@ -236,7 +290,7 @@
             </div>
         </div>
 
-        <!-- Resumen Ejecutivo de Publicidad y Comportamiento Visual -->
+        <!-- Resumen Ejecutivo de Publicidad, Productos Estrella y Comportamiento Visual -->
         <div class="card-kovaq p-5 space-y-4">
             <div class="flex flex-wrap items-center justify-between gap-2">
                 <div>
@@ -302,13 +356,25 @@
                     </div>
                 </div>
             </div>
+
+            <!-- Productos más llevados y mayor indecisión (ahora siempre visibles y vinculados al filtro) -->
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                <div class="bg-emerald-50/60 border border-emerald-200 rounded-xl p-4">
+                    <h4 class="text-xs font-bold uppercase tracking-wider text-emerald-900 m-0 mb-2">Productos más llevados del período</h4>
+                    <ul id="lista-productos-llevados" class="space-y-1.5 text-xs text-kovaq-navy list-none p-0 m-0"></ul>
+                </div>
+                <div class="bg-amber-50/70 border border-amber-200 rounded-xl p-4">
+                    <h4 class="text-xs font-bold uppercase tracking-wider text-amber-900 m-0 mb-2">Mayor indecisión / cambio a último momento</h4>
+                    <ul id="lista-productos-indecision" class="space-y-1.5 text-xs text-kovaq-navy list-none p-0 m-0"></ul>
+                </div>
+            </div>
         </div>
 
         <!-- Registro de continuidad multi-cámara y vectores en escena -->
         <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
             <div class="card-kovaq p-5">
                 <h3 class="text-sm font-extrabold text-kovaq-navy font-title m-0 mb-3">
-                    Vectores anónimos en tienda (sesión viva)
+                    Personas y vectores anónimos en tienda (tiempo real)
                 </h3>
                 <div id="lista-personas-reid" class="space-y-2 text-xs text-kovaq-slate">
                     Esperando telemetría de vectores en el plano 2D...
@@ -330,23 +396,24 @@
         <div class="card-kovaq p-5 flex flex-wrap items-center justify-between gap-4">
             <div>
                 <h2 class="text-lg sm:text-xl font-extrabold text-kovaq-navy font-title m-0">
-                    Evolución Histórica por Días, Semanas y Meses
+                    Evolución Histórica por Horas, Días, Semanas y Meses
                 </h2>
                 <p class="text-xs text-kovaq-slate mt-0.5 mb-0">
-                    Series generadas directamente desde la base histórica de Turso según el filtro activo.
+                    Series generadas directamente desde la base histórica según sucursal, fechas y franja horaria activa.
                 </p>
             </div>
             <div class="flex flex-wrap items-center gap-3">
                 <div class="flex items-center gap-2">
                     <label for="select-agrupacion-temporal" class="text-xs font-bold text-kovaq-navy">Agrupar por:</label>
                     <select id="select-agrupacion-temporal" class="kovaq-select text-xs min-h-[38px]">
+                        <option value="hora">Por Horas</option>
                         <option value="dia">Por Días</option>
                         <option value="semana" selected>Por Semanas</option>
                         <option value="mes">Por Meses</option>
                     </select>
                 </div>
                 <span id="badge-rango-fechas-percha" class="bg-orange-50 text-kovaq-orange border border-orange-200 text-xs font-mono-num font-bold px-3 py-1 rounded-lg">
-                    Últimos 30 días (Semanal)
+                    Últimos 30 días (Semana)
                 </span>
             </div>
         </div>
@@ -394,6 +461,26 @@
                         <span id="franja-noche-trafico" class="font-mono-num text-kovaq-slate block">0</span>
                         <span id="franja-noche-pct" class="font-mono-num font-bold text-kovaq-orange block">0%</span>
                     </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Perfiles de permanencia y Top productos del período -->
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <div class="card-kovaq p-5 space-y-3">
+                <h3 class="text-sm sm:text-base font-extrabold text-kovaq-navy font-title m-0">
+                    Perfiles de permanencia frente a góndola
+                </h3>
+                <div id="lista-perfiles-permanencia" class="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                    <p class="text-kovaq-slate m-0">Cargando perfiles de permanencia...</p>
+                </div>
+            </div>
+            <div class="card-kovaq p-5 space-y-3">
+                <h3 class="text-sm sm:text-base font-extrabold text-kovaq-navy font-title m-0">
+                    Top productos con mayor interacción en el período
+                </h3>
+                <div id="lista-top-productos-analitica" class="space-y-2 text-xs">
+                    <p class="text-kovaq-slate m-0">Cargando ranking de productos...</p>
                 </div>
             </div>
         </div>
@@ -450,7 +537,7 @@
                     <tbody id="yolo-event-log-body" class="divide-y divide-kovaq-border text-kovaq-navy">
                         <tr id="row-empty-audit">
                             <td colspan="5" class="p-4 text-center text-kovaq-slate">
-                                Esperando eventos de la sesión actual. Sube un video o activa la simulación 2D para ver registros.
+                                Esperando eventos de la sesión actual. Reproduce el video, sube un archivo o activa la simulación 2D.
                             </td>
                         </tr>
                     </tbody>
@@ -562,7 +649,7 @@
                 <div id="chat-messages" role="log" aria-live="polite" aria-relevant="additions" class="h-72 overflow-y-auto bg-slate-50 border border-kovaq-border rounded-xl p-3 space-y-3">
                     <div class="p-3 rounded-xl text-xs bg-white border border-kovaq-border text-kovaq-navy max-w-[90%]">
                         <strong class="font-title block mb-1 text-kovaq-orange">Kovaq Marketing AI</strong>
-                        <span>Consulta sobre zonas calientes, devoluciones a último momento o efectividad de tus promociones activas.</span>
+                        <span>Consulta sobre zonas calientes, devoluciones a último momento o efectividad de tus promociones en la sucursal seleccionada.</span>
                     </div>
                 </div>
 
@@ -589,9 +676,67 @@
         </div>
     </section>
 
-    <!-- Módulo 5: Configuración (cámaras, planograma y promociones) -->
+    <!-- Módulo 5: Configuración (sucursales, cámaras, planograma, promociones y datos de simulación) -->
     <section id="tab-config" role="tabpanel" aria-labelledby="btn-tab-config" class="module-pane space-y-6">
         <div id="config-feedback-banner" role="status" aria-live="polite" class="hidden text-xs font-semibold px-4 py-2.5 rounded-xl border"></div>
+
+        <!-- Gestión de Sucursales Retail + Simulación -->
+        <div class="card-kovaq p-5 space-y-4">
+            <div class="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                    <h2 class="text-base sm:text-lg font-extrabold text-kovaq-navy font-title m-0">
+                        Sucursales Retail y Datos de Simulación
+                    </h2>
+                    <p class="text-xs text-kovaq-slate m-0">Administra los locales de tu cadena o regenera datos de demostración por horas y días.</p>
+                </div>
+                <button type="button" id="btn-regenerar-simulacion" class="btn-kovaq-outline text-xs min-h-[38px]">
+                    <i class="bi bi-arrow-repeat" aria-hidden="true"></i>
+                    <span>Regenerar datos de simulación</span>
+                </button>
+            </div>
+
+            <form id="form-nueva-sucursal" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 bg-slate-50 border border-kovaq-border p-4 rounded-xl">
+                <div>
+                    <label for="suc-id" class="block text-xs font-bold text-kovaq-navy mb-1">Código</label>
+                    <input type="text" id="suc-id" placeholder="Ej. SUC-VALLE" class="kovaq-input w-full text-xs font-mono-num">
+                </div>
+                <div>
+                    <label for="suc-nombre" class="block text-xs font-bold text-kovaq-navy mb-1">Nombre sucursal</label>
+                    <input type="text" id="suc-nombre" required placeholder="Ej. Cumbayá Scala" class="kovaq-input w-full text-xs">
+                </div>
+                <div>
+                    <label for="suc-ciudad" class="block text-xs font-bold text-kovaq-navy mb-1">Ciudad</label>
+                    <input type="text" id="suc-ciudad" required value="Quito" class="kovaq-input w-full text-xs">
+                </div>
+                <div>
+                    <label for="suc-formato" class="block text-xs font-bold text-kovaq-navy mb-1">Formato</label>
+                    <select id="suc-formato" class="kovaq-select w-full text-xs">
+                        <option value="Hipermercado">Hipermercado</option>
+                        <option value="Supermercado">Supermercado</option>
+                        <option value="Supermercado Express">Supermercado Express</option>
+                    </select>
+                </div>
+                <div class="flex items-end">
+                    <button type="submit" class="btn-kovaq-primary w-full text-xs min-h-[40px]">Agregar sucursal</button>
+                </div>
+            </form>
+
+            <div class="overflow-x-auto">
+                <table class="w-full text-left border-collapse text-xs">
+                    <caption class="sr-only">Sucursales registradas en el sistema</caption>
+                    <thead class="bg-slate-100 border-b border-kovaq-border text-kovaq-navy font-bold uppercase">
+                        <tr>
+                            <th scope="col" class="p-2.5">Código</th>
+                            <th scope="col" class="p-2.5">Sucursal</th>
+                            <th scope="col" class="p-2.5">Ciudad</th>
+                            <th scope="col" class="p-2.5">Formato</th>
+                            <th scope="col" class="p-2.5">Área</th>
+                        </tr>
+                    </thead>
+                    <tbody id="tabla-sucursales-body" class="divide-y divide-kovaq-border text-kovaq-navy"></tbody>
+                </table>
+            </div>
+        </div>
 
         <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
             <!-- Formulario de Cámaras -->

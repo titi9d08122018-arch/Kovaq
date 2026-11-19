@@ -39,10 +39,13 @@ from database import (
     obtener_camaras_mapa,
     obtener_perchas_mapa,
     obtener_promociones_percha,
+    obtener_sucursales,
     pwd_context,
+    regenerar_simulacion_muestra,
     registrar_o_actualizar_camara_mapa,
     registrar_o_actualizar_percha_mapa,
     registrar_promocion_percha,
+    registrar_sucursal,
 )
 
 MODO = os.getenv("MODO", "local").lower()
@@ -56,6 +59,15 @@ _FECHA_PAT = r"^\d{4}-\d{2}-\d{2}$"
 _exigir_gestion = requerir_roles(*ROLES_GESTION)
 
 
+class SucursalIn(BaseModel):
+    id: str | None = Field(default=None, max_length=32)
+    nombre: str = Field(min_length=2, max_length=120)
+    ciudad: str = Field(default="Quito", min_length=2, max_length=60)
+    direccion: str = Field(default="", max_length=160)
+    formato: str = Field(default="Supermercado", min_length=2, max_length=60)
+    area_m2: int = Field(default=1200, ge=80, le=50000)
+
+
 class CamaraIn(BaseModel):
     id: str | None = Field(default=None, max_length=32)
     nombre: str = Field(default="Nueva Cámara", min_length=1, max_length=120)
@@ -64,6 +76,7 @@ class CamaraIn(BaseModel):
     pos_x: float = Field(default=0.5, ge=0.0, le=1.0)
     pos_y: float = Field(default=0.5, ge=0.0, le=1.0)
     angulo: float = Field(default=45.0, ge=-360.0, le=360.0)
+    sucursal_id: str = Field(default="SUC-NORTE", max_length=32)
 
 
 class PerchaIn(BaseModel):
@@ -78,6 +91,7 @@ class PerchaIn(BaseModel):
     roi: dict | None = None
     niveles: list[dict] | None = None
     color: str = Field(default="#FE5000", max_length=16)
+    sucursal_id: str = Field(default="SUC-NORTE", max_length=32)
 
 
 class PromocionIn(BaseModel):
@@ -88,11 +102,15 @@ class PromocionIn(BaseModel):
     tipo_publicidad: str = Field(default="Cenefa / Cartel POP", min_length=1, max_length=80)
     mensaje_pop: str = Field(default="", max_length=240)
     descuento_pct: int = Field(default=0, ge=0, le=100)
+    sucursal_id: str = Field(default="SUC-NORTE", max_length=32)
 
 
 class ChatIn(BaseModel):
     mensaje: str = Field(min_length=1, max_length=600)
     modo: str = Field(default="datos", max_length=32)
+    sucursal_id: str | None = Field(default=None, max_length=32)
+    dias: int = Field(default=30, ge=1, le=365)
+    horas: int | None = Field(default=None, ge=1, le=168)
 
 
 class ControlIn(BaseModel):
@@ -346,12 +364,57 @@ async def eliminar_usuario(usuario_id: int, user: dict = Depends(_exigir_gestion
     return RedirectResponse(url="/usuarios", status_code=303)
 
 
-# Mapeo 2D, planograma y promociones
+# Sucursales, mapeo 2D, planograma y promociones
+
+@app.get("/api/branches")
+async def api_listar_sucursales(request: Request):
+    await obtener_usuario_actual(request)
+    sucursales = await asyncio.to_thread(obtener_sucursales)
+    return {"sucursales": sucursales}
+
+
+@app.post("/api/branches")
+async def api_guardar_sucursal(payload: SucursalIn, _user: dict = Depends(_exigir_gestion)):
+    suc_id = (payload.id or f"SUC-{uuid.uuid4().hex[:5].upper()}").strip().upper()
+    await asyncio.to_thread(
+        registrar_sucursal,
+        suc_id,
+        payload.nombre.strip(),
+        payload.ciudad.strip(),
+        payload.direccion.strip(),
+        payload.formato.strip(),
+        payload.area_m2,
+    )
+    sucursales = await asyncio.to_thread(obtener_sucursales)
+    return {"ok": True, "sucursal_id": suc_id, "sucursales": sucursales}
+
+
+@app.post("/api/simulation/reseed")
+async def api_reseed_simulacion(_user: dict = Depends(_exigir_gestion)):
+    await asyncio.to_thread(regenerar_simulacion_muestra)
+    await asyncio.to_thread(camara.recargar_mapa_tienda)
+    return {"ok": True, "mensaje": "Datos históricos y horarios de simulación regenerados para todas las sucursales."}
+
 
 @app.get("/api/map_state")
-async def api_map_state(request: Request):
+async def api_map_state(
+    request: Request,
+    sucursal_id: str | None = Query(None, max_length=32),
+    dias: int = Query(30, ge=1, le=365),
+    horas: int | None = Query(None, ge=1, le=168),
+    fecha_inicio: str | None = Query(None, pattern=_FECHA_PAT),
+    fecha_fin: str | None = Query(None, pattern=_FECHA_PAT),
+    hora_inicio: int | None = Query(None, ge=0, le=23),
+    hora_fin: int | None = Query(None, ge=0, le=23),
+):
     await obtener_usuario_actual(request)
-    estado = await asyncio.to_thread(camara.obtener_estado_mapa_2d)
+    try:
+        estado = await asyncio.to_thread(
+            camara.obtener_estado_mapa_2d,
+            sucursal_id, dias, horas, fecha_inicio, fecha_fin, hora_inicio, hora_fin,
+        )
+    except ValueError as err:
+        raise HTTPException(status_code=400, detail=str(err))
     cams_seguras = [{**c, "ruta": _redactar_ruta_rtsp(c.get("ruta", ""))} for c in estado.get("camaras", [])]
     return {**estado, "camaras": cams_seguras}
 
@@ -375,9 +438,9 @@ async def api_select_camera(request: Request, _user: dict = Depends(_exigir_gest
 
 
 @app.get("/api/cameras")
-async def api_listar_camaras(request: Request):
+async def api_listar_camaras(request: Request, sucursal_id: str | None = Query(None, max_length=32)):
     await obtener_usuario_actual(request)
-    cams = await asyncio.to_thread(obtener_camaras_mapa)
+    cams = await asyncio.to_thread(obtener_camaras_mapa, sucursal_id)
     return {"camaras": [{**c, "ruta": _redactar_ruta_rtsp(c.get("ruta", ""))} for c in cams]}
 
 
@@ -395,24 +458,36 @@ async def api_guardar_camara(payload: CamaraIn, _user: dict = Depends(_exigir_ge
         payload.pos_x,
         payload.pos_y,
         payload.angulo,
+        payload.sucursal_id,
     )
     await asyncio.to_thread(camara.recargar_mapa_tienda)
-    cams = await asyncio.to_thread(obtener_camaras_mapa)
+    cams = await asyncio.to_thread(obtener_camaras_mapa, payload.sucursal_id)
     return {"ok": True, "camaras": [{**c, "ruta": _redactar_ruta_rtsp(c.get("ruta", ""))} for c in cams]}
 
 
 @app.delete("/api/cameras/{cam_id}")
-async def api_borrar_camara(cam_id: str, _user: dict = Depends(_exigir_gestion)):
+async def api_borrar_camara(cam_id: str, sucursal_id: str | None = Query(None, max_length=32), _user: dict = Depends(_exigir_gestion)):
     await asyncio.to_thread(eliminar_camara_mapa, cam_id)
     await asyncio.to_thread(camara.recargar_mapa_tienda)
-    cams = await asyncio.to_thread(obtener_camaras_mapa)
+    cams = await asyncio.to_thread(obtener_camaras_mapa, sucursal_id)
     return {"ok": True, "camaras": [{**c, "ruta": _redactar_ruta_rtsp(c.get("ruta", ""))} for c in cams]}
 
 
 @app.get("/api/shelves")
-async def api_listar_perchas(request: Request):
+async def api_listar_perchas(
+    request: Request,
+    sucursal_id: str | None = Query(None, max_length=32),
+    dias: int = Query(30, ge=1, le=365),
+    horas: int | None = Query(None, ge=1, le=168),
+    fecha_inicio: str | None = Query(None, pattern=_FECHA_PAT),
+    fecha_fin: str | None = Query(None, pattern=_FECHA_PAT),
+    hora_inicio: int | None = Query(None, ge=0, le=23),
+    hora_fin: int | None = Query(None, ge=0, le=23),
+):
     await obtener_usuario_actual(request)
-    perchas = await asyncio.to_thread(obtener_perchas_mapa)
+    perchas = await asyncio.to_thread(
+        obtener_perchas_mapa, dias, fecha_inicio, fecha_fin, None, horas, hora_inicio, hora_fin, sucursal_id
+    )
     return {"perchas": perchas}
 
 
@@ -434,16 +509,17 @@ async def api_guardar_percha(payload: PerchaIn, _user: dict = Depends(_exigir_ge
         roi,
         niveles,
         payload.color,
+        payload.sucursal_id,
     )
     await asyncio.to_thread(camara.recargar_mapa_tienda)
-    perchas = await asyncio.to_thread(obtener_perchas_mapa)
+    perchas = await asyncio.to_thread(obtener_perchas_mapa, 30, None, None, None, None, None, None, payload.sucursal_id)
     return {"ok": True, "perchas": perchas}
 
 
 @app.get("/api/promotions")
-async def api_listar_promociones(request: Request):
+async def api_listar_promociones(request: Request, sucursal_id: str | None = Query(None, max_length=32)):
     await obtener_usuario_actual(request)
-    promos = await asyncio.to_thread(obtener_promociones_percha)
+    promos = await asyncio.to_thread(obtener_promociones_percha, sucursal_id)
     return {"promociones": promos}
 
 
@@ -459,17 +535,18 @@ async def api_guardar_promocion(payload: PromocionIn, _user: dict = Depends(_exi
         payload.tipo_publicidad.strip(),
         payload.mensaje_pop.strip(),
         payload.descuento_pct,
+        payload.sucursal_id,
     )
     await asyncio.to_thread(camara.recargar_mapa_tienda)
-    promos = await asyncio.to_thread(obtener_promociones_percha)
+    promos = await asyncio.to_thread(obtener_promociones_percha, payload.sucursal_id)
     return {"ok": True, "promociones": promos}
 
 
 @app.delete("/api/promotions/{promo_id}")
-async def api_borrar_promocion(promo_id: str, _user: dict = Depends(_exigir_gestion)):
+async def api_borrar_promocion(promo_id: str, sucursal_id: str | None = Query(None, max_length=32), _user: dict = Depends(_exigir_gestion)):
     await asyncio.to_thread(eliminar_promocion_percha, promo_id)
     await asyncio.to_thread(camara.recargar_mapa_tienda)
-    promos = await asyncio.to_thread(obtener_promociones_percha)
+    promos = await asyncio.to_thread(obtener_promociones_percha, sucursal_id)
     return {"ok": True, "promociones": promos}
 
 
@@ -493,7 +570,13 @@ async def api_chat(payload: ChatIn, request: Request):
     mensaje = payload.mensaje.strip()
     if not mensaje:
         raise HTTPException(status_code=400, detail="El mensaje está vacío")
-    respuesta_ia = await preguntar_a_los_datos(mensaje, modo=payload.modo)
+    respuesta_ia = await preguntar_a_los_datos(
+        mensaje,
+        modo=payload.modo,
+        sucursal_id=payload.sucursal_id,
+        dias=payload.dias,
+        horas=payload.horas,
+    )
     return {"respuesta": respuesta_ia}
 
 
@@ -561,8 +644,19 @@ async def cambiar_fuente_api(payload: FuenteIn, _user: dict = Depends(_exigir_ge
     return {"ok": True, "tipo": payload.tipo, "ruta": _redactar_ruta_rtsp(ruta_validada), "camara_activa": camara.camara_activa_id}
 
 
-def _obtener_stats(dias: int = 30, fecha_inicio: str = None, fecha_fin: str = None):
-    where_ev, params_ev = _construir_filtro_fecha(dias, fecha_inicio, fecha_fin, "creado")
+def _obtener_stats(
+    dias: int = 30,
+    fecha_inicio: str = None,
+    fecha_fin: str = None,
+    horas: int = None,
+    hora_inicio: int = None,
+    hora_fin: int = None,
+    sucursal_id: str = None,
+):
+    where_ev, params_ev = _construir_filtro_fecha(
+        dias, fecha_inicio, fecha_fin, "creado",
+        horas=horas, hora_inicio=hora_inicio, hora_fin=hora_fin, sucursal_id=sucursal_id,
+    )
     fila = leer(
         f"""
         SELECT
@@ -588,6 +682,7 @@ def _obtener_stats(dias: int = 30, fecha_inicio: str = None, fecha_fin: str = No
         params_ev,
     )
     return {
+        "sucursal_id": sucursal_id or "todas",
         "trafico": int(fila[0] or 0),
         "permanencia_eventos": int(fila[1] or 0),
         "permanencia_promedio_seg": round(float(fila[2] or 0), 1),
@@ -618,12 +713,18 @@ def _texto_resumen(s):
 async def api_stats(
     request: Request,
     dias: int = Query(30, ge=1, le=365),
+    horas: int | None = Query(None, ge=1, le=168),
     fecha_inicio: str | None = Query(None, pattern=_FECHA_PAT),
     fecha_fin: str | None = Query(None, pattern=_FECHA_PAT),
+    hora_inicio: int | None = Query(None, ge=0, le=23),
+    hora_fin: int | None = Query(None, ge=0, le=23),
+    sucursal_id: str | None = Query(None, max_length=32),
 ):
     await obtener_usuario_actual(request)
     try:
-        s = await asyncio.to_thread(_obtener_stats, dias, fecha_inicio, fecha_fin)
+        s = await asyncio.to_thread(
+            _obtener_stats, dias, fecha_inicio, fecha_fin, horas, hora_inicio, hora_fin, sucursal_id
+        )
     except ValueError as err:
         raise HTTPException(status_code=400, detail=str(err))
     except Exception:

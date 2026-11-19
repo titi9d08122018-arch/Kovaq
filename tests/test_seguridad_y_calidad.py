@@ -83,3 +83,79 @@ def test_fechas_invalidas_y_logout_post_y_cabeceras_seguridad(client):
     r_out = client.post("/logout", follow_redirects=False)
     assert r_out.status_code == 303
     assert r_out.headers["location"] == "/login"
+
+
+def test_sucursales_filtro_horario_y_mapa_calor_enlazado(client):
+    u, p = crear_usuario_prueba(username="adm_suc", rol="admin")
+    _login(client, u, p)
+
+    # 1. Sucursales precargadas y alta de nueva sucursal
+    r_br = client.get("/api/branches")
+    assert r_br.status_code == 200
+    sucs = r_br.json()["sucursales"]
+    assert len(sucs) >= 3
+    ids = {s["id"] for s in sucs}
+    assert {"SUC-NORTE", "SUC-CENTRO", "SUC-SUR"}.issubset(ids)
+
+    r_new = client.post("/api/branches", json={
+        "id": "SUC-VALLE", "nombre": "Sucursal Valle", "ciudad": "Quito", "formato": "Supermercado", "area_m2": 1100
+    })
+    assert r_new.status_code == 200
+    assert any(s["id"] == "SUC-VALLE" for s in r_new.json()["sucursales"])
+
+    # 2. Control por horas (1h, 6h, 24h) vs días (7d, 30d) actualiza los datos reales
+    st_1h = client.get("/api/stats?horas=1&sucursal_id=SUC-NORTE").json()
+    st_24h = client.get("/api/stats?horas=24&sucursal_id=SUC-NORTE").json()
+    st_30d = client.get("/api/stats?dias=30&sucursal_id=SUC-NORTE").json()
+    st_centro = client.get("/api/stats?dias=30&sucursal_id=SUC-CENTRO").json()
+    st_todas = client.get("/api/stats?dias=30&sucursal_id=todas").json()
+
+    assert st_1h["trafico"] > 0
+    assert st_24h["trafico"] > st_1h["trafico"]
+    assert st_30d["trafico"] > st_24h["trafico"]
+    assert st_todas["trafico"] >= st_30d["trafico"] + st_centro["trafico"]
+
+    # 3. Serie temporal agrupada por horas y filtro de franja horaria (hora_inicio..hora_fin)
+    r_hora = client.get("/api/analytics/serie_temporal?agrupacion=hora&horas=24&sucursal_id=SUC-NORTE")
+    assert r_hora.status_code == 200
+    dh = r_hora.json()
+    assert dh["agrupacion"] == "hora"
+    assert len(dh["labels"]) >= 6
+    assert sum(dh["trafico"]) > 0
+
+    st_manana = client.get("/api/stats?dias=30&hora_inicio=8&hora_fin=11&sucursal_id=SUC-NORTE").json()
+    assert st_manana["trafico"] > 0
+    assert st_manana["trafico"] < st_30d["trafico"]
+
+    # 4. Mapa arquitectónico y mapa de calor espacial enlazados al período y sucursal
+    map_1h = client.get("/api/map_state?horas=1&sucursal_id=SUC-NORTE").json()
+    map_30d = client.get("/api/map_state?dias=30&sucursal_id=SUC-NORTE").json()
+    map_centro = client.get("/api/map_state?dias=30&sucursal_id=SUC-CENTRO").json()
+
+    assert "plano_arquitectura" in map_30d
+    assert "bodega" in map_30d["plano_arquitectura"]
+    assert "linea_cajas" in map_30d["plano_arquitectura"]
+    assert len(map_30d["camaras"]) >= 3
+    assert map_30d["heatmap_meta"]["total_muestras"] > map_1h["heatmap_meta"]["total_muestras"]
+    assert map_centro["sucursal_id"] == "SUC-CENTRO"
+    assert any(p["id"].startswith("PER-CEN") for p in map_centro["perchas"])
+
+    # 4b. Top productos agrupa correctamente sin fragmentar por sesión VEC
+    r_top = client.get("/api/analytics/productos/top?dias=30&sucursal_id=SUC-NORTE")
+    assert r_top.status_code == 200
+    top_items = r_top.json()["productos"]
+    assert len(top_items) >= 3
+    assert top_items[0]["interacciones"] >= 10
+    assert "(VEC-" not in top_items[0]["nombre"]
+
+    # 5. Polígonos en perspectiva y trackeo real del video demo
+    import json, os
+    tracks_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "static", "demo_tracks.json")
+    assert os.path.exists(tracks_path)
+    with open(tracks_path, "r", encoding="utf-8") as fh:
+        dt = json.load(fh)
+    assert dt["total_frames"] == 240
+    assert len(dt["shelves"]) == 2
+    assert len(dt["shelves"][0]["poly"]) == 5
+    assert any(len(fr["p"]) >= 2 for fr in dt["frames"])
+

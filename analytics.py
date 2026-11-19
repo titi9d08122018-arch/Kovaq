@@ -1,4 +1,4 @@
-"""Router de analítica avanzada, series temporales y resumen ejecutivo de publicidad."""
+"""Router de analítica avanzada, series temporales (horas/días/semanas/meses), mapa de calor espacial y sucursales."""
 import asyncio
 
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -13,6 +13,7 @@ from database import (
     obtener_heatmap_hora,
     obtener_interacciones_por_hora,
     obtener_inventario_real,
+    obtener_mapa_calor_espacial,
     obtener_perfil_permanencia,
     obtener_productos_por_franja,
     obtener_resumen_ejecutivo_publicidad,
@@ -26,52 +27,93 @@ router = APIRouter(prefix="/api/analytics", tags=["analytics"])
 _FECHA_PAT = r"^\d{4}-\d{2}-\d{2}$"
 
 
-async def _ejecutar_consulta(fn, *args):
+async def _ejecutar_consulta(fn, *args, **kwargs):
     try:
-        return await asyncio.to_thread(fn, *args)
+        return await asyncio.to_thread(fn, *args, **kwargs)
     except ValueError as err:
         raise HTTPException(status_code=400, detail=str(err))
 
 
-# Heatmaps y series temporales
+# Series temporales y heatmaps (enlazados a horas, días, semanas, meses y sucursal)
 
 @router.get("/serie_temporal")
 async def serie_temporal(
     request: Request,
-    agrupacion: str = Query("dia", pattern="^(dia|semana|mes)$"),
+    agrupacion: str = Query("dia", pattern="^(hora|dia|semana|mes)$"),
     dias: int = Query(30, ge=1, le=365),
+    horas: int | None = Query(None, ge=1, le=168),
     fecha_inicio: str | None = Query(None, pattern=_FECHA_PAT),
     fecha_fin: str | None = Query(None, pattern=_FECHA_PAT),
+    hora_inicio: int | None = Query(None, ge=0, le=23),
+    hora_fin: int | None = Query(None, ge=0, le=23),
+    sucursal_id: str | None = Query(None, max_length=32),
 ):
     await obtener_usuario_actual(request)
-    return await _ejecutar_consulta(obtener_serie_temporal_periodo, agrupacion, dias, fecha_inicio, fecha_fin)
+    return await _ejecutar_consulta(
+        obtener_serie_temporal_periodo,
+        agrupacion, dias, fecha_inicio, fecha_fin,
+        horas=horas, hora_inicio=hora_inicio, hora_fin=hora_fin, sucursal_id=sucursal_id,
+    )
+
+
+@router.get("/heatmap/espacial")
+async def heatmap_espacial(
+    request: Request,
+    dias: int = Query(30, ge=1, le=365),
+    horas: int | None = Query(None, ge=1, le=168),
+    fecha_inicio: str | None = Query(None, pattern=_FECHA_PAT),
+    fecha_fin: str | None = Query(None, pattern=_FECHA_PAT),
+    hora_inicio: int | None = Query(None, ge=0, le=23),
+    hora_fin: int | None = Query(None, ge=0, le=23),
+    sucursal_id: str | None = Query(None, max_length=32),
+):
+    await obtener_usuario_actual(request)
+    return await _ejecutar_consulta(
+        obtener_mapa_calor_espacial,
+        dias, fecha_inicio, fecha_fin,
+        horas=horas, hora_inicio=hora_inicio, hora_fin=hora_fin, sucursal_id=sucursal_id,
+    )
 
 
 @router.get("/heatmap/hora")
 async def heatmap_hora(
     request: Request,
     dias: int = Query(7, ge=1, le=365),
+    horas: int | None = Query(None, ge=1, le=168),
     fecha_inicio: str | None = Query(None, pattern=_FECHA_PAT),
     fecha_fin: str | None = Query(None, pattern=_FECHA_PAT),
+    hora_inicio: int | None = Query(None, ge=0, le=23),
+    hora_fin: int | None = Query(None, ge=0, le=23),
+    sucursal_id: str | None = Query(None, max_length=32),
 ):
     await obtener_usuario_actual(request)
-    data = await _ejecutar_consulta(obtener_heatmap_hora, dias, fecha_inicio, fecha_fin)
-    horas = {str(i).zfill(2): 0 for i in range(24)}
+    data = await _ejecutar_consulta(
+        obtener_heatmap_hora, dias, fecha_inicio, fecha_fin,
+        horas=horas, hora_inicio=hora_inicio, hora_fin=hora_fin, sucursal_id=sucursal_id,
+    )
+    horas_map = {str(i).zfill(2): 0 for i in range(24)}
     for row in data:
         if row[0] is not None:
-            horas[str(row[0]).zfill(2)] = row[1]
-    return {"labels": list(horas.keys()), "data": list(horas.values())}
+            horas_map[str(row[0]).zfill(2)] = row[1]
+    return {"labels": list(horas_map.keys()), "data": list(horas_map.values())}
 
 
 @router.get("/heatmap/matriz")
 async def heatmap_matriz(
     request: Request,
     dias: int = Query(30, ge=1, le=365),
+    horas: int | None = Query(None, ge=1, le=168),
     fecha_inicio: str | None = Query(None, pattern=_FECHA_PAT),
     fecha_fin: str | None = Query(None, pattern=_FECHA_PAT),
+    hora_inicio: int | None = Query(None, ge=0, le=23),
+    hora_fin: int | None = Query(None, ge=0, le=23),
+    sucursal_id: str | None = Query(None, max_length=32),
 ):
     await obtener_usuario_actual(request)
-    data = await _ejecutar_consulta(obtener_heatmap_dia_hora, dias, fecha_inicio, fecha_fin)
+    data = await _ejecutar_consulta(
+        obtener_heatmap_dia_hora, dias, fecha_inicio, fecha_fin,
+        horas=horas, hora_inicio=hora_inicio, hora_fin=hora_fin, sucursal_id=sucursal_id,
+    )
     matriz = [[0] * 24 for _ in range(7)]
     nombres_dias = ["Dom", "Lun", "Mar", "Mié", "Jue", "Vie", "Sáb"]
 
@@ -139,11 +181,18 @@ async def heatmap_matriz(
 async def heatmap_interacciones(
     request: Request,
     dias: int = Query(7, ge=1, le=365),
+    horas: int | None = Query(None, ge=1, le=168),
     fecha_inicio: str | None = Query(None, pattern=_FECHA_PAT),
     fecha_fin: str | None = Query(None, pattern=_FECHA_PAT),
+    hora_inicio: int | None = Query(None, ge=0, le=23),
+    hora_fin: int | None = Query(None, ge=0, le=23),
+    sucursal_id: str | None = Query(None, max_length=32),
 ):
     await obtener_usuario_actual(request)
-    data = await _ejecutar_consulta(obtener_interacciones_por_hora, dias, fecha_inicio, fecha_fin)
+    data = await _ejecutar_consulta(
+        obtener_interacciones_por_hora, dias, fecha_inicio, fecha_fin,
+        horas=horas, hora_inicio=hora_inicio, hora_fin=hora_fin, sucursal_id=sucursal_id,
+    )
     resultado = {}
     for hora, producto, total in data:
         resultado.setdefault(hora, []).append({"producto": producto, "total": total})
@@ -156,11 +205,18 @@ async def heatmap_interacciones(
 async def inventario(
     request: Request,
     dias: int = Query(30, ge=1, le=365),
+    horas: int | None = Query(None, ge=1, le=168),
     fecha_inicio: str | None = Query(None, pattern=_FECHA_PAT),
     fecha_fin: str | None = Query(None, pattern=_FECHA_PAT),
+    hora_inicio: int | None = Query(None, ge=0, le=23),
+    hora_fin: int | None = Query(None, ge=0, le=23),
+    sucursal_id: str | None = Query(None, max_length=32),
 ):
     await obtener_usuario_actual(request)
-    items = await _ejecutar_consulta(obtener_inventario_real, dias, fecha_inicio, fecha_fin)
+    items = await _ejecutar_consulta(
+        obtener_inventario_real, dias, fecha_inicio, fecha_fin,
+        horas=horas, hora_inicio=hora_inicio, hora_fin=hora_fin, sucursal_id=sucursal_id,
+    )
     return {"productos": items}
 
 
@@ -169,11 +225,18 @@ async def top_productos(
     request: Request,
     limite: int = Query(10, ge=1, le=50),
     dias: int = Query(30, ge=1, le=365),
+    horas: int | None = Query(None, ge=1, le=168),
     fecha_inicio: str | None = Query(None, pattern=_FECHA_PAT),
     fecha_fin: str | None = Query(None, pattern=_FECHA_PAT),
+    hora_inicio: int | None = Query(None, ge=0, le=23),
+    hora_fin: int | None = Query(None, ge=0, le=23),
+    sucursal_id: str | None = Query(None, max_length=32),
 ):
     await obtener_usuario_actual(request)
-    data = await _ejecutar_consulta(obtener_top_productos, limite, dias, fecha_inicio, fecha_fin)
+    data = await _ejecutar_consulta(
+        obtener_top_productos, limite, dias, fecha_inicio, fecha_fin,
+        horas=horas, hora_inicio=hora_inicio, hora_fin=hora_fin, sucursal_id=sucursal_id,
+    )
     return {"productos": [{"nombre": p[0], "interacciones": p[1]} for p in data]}
 
 
@@ -185,9 +248,9 @@ async def buscar(request: Request, q: str = Query(..., min_length=1, max_length=
 
 
 @router.get("/categorias")
-async def categorias(request: Request):
+async def categorias(request: Request, sucursal_id: str | None = Query(None, max_length=32)):
     await obtener_usuario_actual(request)
-    data = await asyncio.to_thread(obtener_categorias_con_productos)
+    data = await asyncio.to_thread(obtener_categorias_con_productos, 90, sucursal_id)
     cats = {}
     for cat, prod, inter in data:
         cats.setdefault(cat, []).append({"producto": prod, "interacciones": inter})
@@ -200,11 +263,18 @@ async def categorias(request: Request):
 async def stats_franjas(
     request: Request,
     dias: int = Query(7, ge=1, le=365),
+    horas: int | None = Query(None, ge=1, le=168),
     fecha_inicio: str | None = Query(None, pattern=_FECHA_PAT),
     fecha_fin: str | None = Query(None, pattern=_FECHA_PAT),
+    hora_inicio: int | None = Query(None, ge=0, le=23),
+    hora_fin: int | None = Query(None, ge=0, le=23),
+    sucursal_id: str | None = Query(None, max_length=32),
 ):
     await obtener_usuario_actual(request)
-    data = await _ejecutar_consulta(obtener_stats_por_franja, dias, fecha_inicio, fecha_fin)
+    data = await _ejecutar_consulta(
+        obtener_stats_por_franja, dias, fecha_inicio, fecha_fin,
+        horas=horas, hora_inicio=hora_inicio, hora_fin=hora_fin, sucursal_id=sucursal_id,
+    )
     franjas = {
         "manana": {"trafico": 0, "interacciones": 0, "permanencia": 0.0, "conversion": 0.0},
         "tarde": {"trafico": 0, "interacciones": 0, "permanencia": 0.0, "conversion": 0.0},
@@ -241,11 +311,18 @@ async def stats_franjas(
 async def productos_por_franja(
     request: Request,
     dias: int = Query(7, ge=1, le=365),
+    horas: int | None = Query(None, ge=1, le=168),
     fecha_inicio: str | None = Query(None, pattern=_FECHA_PAT),
     fecha_fin: str | None = Query(None, pattern=_FECHA_PAT),
+    hora_inicio: int | None = Query(None, ge=0, le=23),
+    hora_fin: int | None = Query(None, ge=0, le=23),
+    sucursal_id: str | None = Query(None, max_length=32),
 ):
     await obtener_usuario_actual(request)
-    data = await _ejecutar_consulta(obtener_productos_por_franja, dias, fecha_inicio, fecha_fin)
+    data = await _ejecutar_consulta(
+        obtener_productos_por_franja, dias, fecha_inicio, fecha_fin,
+        horas=horas, hora_inicio=hora_inicio, hora_fin=hora_fin, sucursal_id=sucursal_id,
+    )
     resultado = {"manana": [], "tarde": [], "noche": []}
     for franja, producto, interacciones in data:
         if franja in resultado:
@@ -257,11 +334,18 @@ async def productos_por_franja(
 async def perfiles(
     request: Request,
     dias: int = Query(7, ge=1, le=365),
+    horas: int | None = Query(None, ge=1, le=168),
     fecha_inicio: str | None = Query(None, pattern=_FECHA_PAT),
     fecha_fin: str | None = Query(None, pattern=_FECHA_PAT),
+    hora_inicio: int | None = Query(None, ge=0, le=23),
+    hora_fin: int | None = Query(None, ge=0, le=23),
+    sucursal_id: str | None = Query(None, max_length=32),
 ):
     await obtener_usuario_actual(request)
-    data = await _ejecutar_consulta(obtener_perfil_permanencia, dias, fecha_inicio, fecha_fin)
+    data = await _ejecutar_consulta(
+        obtener_perfil_permanencia, dias, fecha_inicio, fecha_fin,
+        horas=horas, hora_inicio=hora_inicio, hora_fin=hora_fin, sucursal_id=sucursal_id,
+    )
     return {"perfiles": [{"tipo": p[0], "cantidad": p[1], "promedio_seg": p[2]} for p in data]}
 
 
@@ -269,11 +353,18 @@ async def perfiles(
 async def tendencia(
     request: Request,
     dias: int = Query(14, ge=1, le=365),
+    horas: int | None = Query(None, ge=1, le=168),
     fecha_inicio: str | None = Query(None, pattern=_FECHA_PAT),
     fecha_fin: str | None = Query(None, pattern=_FECHA_PAT),
+    hora_inicio: int | None = Query(None, ge=0, le=23),
+    hora_fin: int | None = Query(None, ge=0, le=23),
+    sucursal_id: str | None = Query(None, max_length=32),
 ):
     await obtener_usuario_actual(request)
-    data = await _ejecutar_consulta(obtener_tendencia_diaria, dias, fecha_inicio, fecha_fin)
+    data = await _ejecutar_consulta(
+        obtener_tendencia_diaria, dias, fecha_inicio, fecha_fin,
+        horas=horas, hora_inicio=hora_inicio, hora_fin=hora_fin, sucursal_id=sucursal_id,
+    )
     return {
         "fechas": [r[0] for r in data],
         "trafico": [r[1] for r in data],
@@ -289,11 +380,18 @@ async def publicidad(
     request: Request,
     franja: str | None = Query(None, pattern="^(manana|tarde|noche)$"),
     dias: int = Query(7, ge=1, le=365),
+    horas: int | None = Query(None, ge=1, le=168),
     fecha_inicio: str | None = Query(None, pattern=_FECHA_PAT),
     fecha_fin: str | None = Query(None, pattern=_FECHA_PAT),
+    hora_inicio: int | None = Query(None, ge=0, le=23),
+    hora_fin: int | None = Query(None, ge=0, le=23),
+    sucursal_id: str | None = Query(None, max_length=32),
 ):
     await obtener_usuario_actual(request)
-    data = await _ejecutar_consulta(obtener_datos_publicidad, franja, dias, fecha_inicio, fecha_fin)
+    data = await _ejecutar_consulta(
+        obtener_datos_publicidad, franja, dias, fecha_inicio, fecha_fin,
+        horas=horas, hora_inicio=hora_inicio, hora_fin=hora_fin, sucursal_id=sucursal_id,
+    )
 
     sugerencias = []
     if data["trafico"] > 0:
@@ -360,10 +458,17 @@ async def publicidad(
 async def resumen_publicidad_ejecutivo(
     request: Request,
     dias: int = Query(30, ge=1, le=365),
+    horas: int | None = Query(None, ge=1, le=168),
     fecha_inicio: str | None = Query(None, pattern=_FECHA_PAT),
     fecha_fin: str | None = Query(None, pattern=_FECHA_PAT),
+    hora_inicio: int | None = Query(None, ge=0, le=23),
+    hora_fin: int | None = Query(None, ge=0, le=23),
+    sucursal_id: str | None = Query(None, max_length=32),
 ):
     await obtener_usuario_actual(request)
-    exec_data = await _ejecutar_consulta(obtener_resumen_ejecutivo_publicidad, dias, fecha_inicio, fecha_fin)
+    exec_data = await _ejecutar_consulta(
+        obtener_resumen_ejecutivo_publicidad, dias, fecha_inicio, fecha_fin,
+        horas=horas, hora_inicio=hora_inicio, hora_fin=hora_fin, sucursal_id=sucursal_id,
+    )
     exec_data["motor_marketing_ai"] = KovaqMarketingAnalyticsEngine.generar_diagnostico_integral(exec_data)
     return exec_data

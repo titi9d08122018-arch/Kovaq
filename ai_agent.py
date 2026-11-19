@@ -20,7 +20,7 @@ PREFERIDOS = ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"]
 MODOS = ("datos", "recomendacion", "publicidad", "estrategia")
 TTL_DATOS = 15
 _cache_lock = threading.Lock()
-_cache_datos: dict = {"t": 0.0, "d": None}
+_cache_datos: dict = {}
 
 
 class KovaqMarketingAnalyticsEngine:
@@ -165,22 +165,26 @@ class KovaqMarketingAnalyticsEngine:
         return None
 
 
-def _obtener_datos_base() -> dict:
+def _obtener_datos_base(sucursal_id: str | None = None, dias: int = 30, horas: int | None = None) -> dict:
+    clave = f"{sucursal_id or 'todas'}:{dias}:{horas or ''}"
     ahora = time.time()
     with _cache_lock:
-        if _cache_datos["d"] is not None and ahora - _cache_datos["t"] < TTL_DATOS:
-            return _cache_datos["d"]
+        prev = _cache_datos.get(clave)
+        if prev is not None and ahora - prev["t"] < TTL_DATOS:
+            return prev["d"]
     try:
-        fila = leer("""SELECT
+        from database import _construir_filtro_fecha
+        where_ev, params_ev = _construir_filtro_fecha(dias=dias, horas=horas, sucursal_id=sucursal_id)
+        fila = leer(f"""SELECT
                 COALESCE(SUM(CASE WHEN tipo = 'trafico' THEN 1 ELSE 0 END), 0),
                 COALESCE(AVG(CASE WHEN tipo = 'permanencia' THEN valor END), 0),
                 COALESCE(SUM(CASE WHEN tipo IN ('producto_tomado', 'interaccion') THEN 1 ELSE 0 END), 0)
-            FROM eventos""", uno=True)
+            FROM eventos WHERE {where_ev}""", params_ev, uno=True)
 
-        top = leer("""SELECT detalle, COUNT(*) FROM eventos WHERE tipo IN ('producto_tomado', 'interaccion')
-                    GROUP BY detalle ORDER BY COUNT(*) DESC LIMIT 3""")
+        top = leer(f"""SELECT detalle, COUNT(*) FROM eventos WHERE tipo IN ('producto_tomado', 'interaccion') AND {where_ev}
+                    GROUP BY detalle ORDER BY COUNT(*) DESC LIMIT 3""", params_ev)
 
-        exec_summary = obtener_resumen_ejecutivo_publicidad()
+        exec_summary = obtener_resumen_ejecutivo_publicidad(dias=dias, horas=horas, sucursal_id=sucursal_id)
         diag = KovaqMarketingAnalyticsEngine.generar_diagnostico_integral(exec_summary)
 
         d = {
@@ -192,18 +196,24 @@ def _obtener_datos_base() -> dict:
             "diag": diag
         }
         with _cache_lock:
-            _cache_datos["t"], _cache_datos["d"] = ahora, d
+            _cache_datos[clave] = {"t": ahora, "d": d}
         return d
     except Exception as e:
         log.error("Error leyendo BD en ai_agent: %r", e)
         return {"trafico": 0, "permanencia": 0.0, "interacciones": 0, "productos": ["ninguno"], "exec_summary": {}, "diag": {}}
 
 
-async def preguntar_a_los_datos(pregunta: str, modo: str = "datos") -> str:
+async def preguntar_a_los_datos(
+    pregunta: str,
+    modo: str = "datos",
+    sucursal_id: str | None = None,
+    dias: int = 30,
+    horas: int | None = None,
+) -> str:
     if modo not in MODOS:
         modo = "datos"
 
-    d = await asyncio.to_thread(_obtener_datos_base)
+    d = await asyncio.to_thread(_obtener_datos_base, sucursal_id, dias, horas)
     exec_summary = d.get("exec_summary") or {}
     diag = d.get("diag") or KovaqMarketingAnalyticsEngine.generar_diagnostico_integral(exec_summary)
 
