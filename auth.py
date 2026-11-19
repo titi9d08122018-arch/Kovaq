@@ -1,10 +1,12 @@
 import asyncio
 import os
+import threading
+import time
 import jwt
 from dotenv import load_dotenv
 from fastapi import HTTPException, Request, status
 
-from database import leer
+from database import TURSO_URL, leer
 
 load_dotenv()
 
@@ -12,6 +14,18 @@ _SECRETOS_INSEGUROS = {"", "cambiar_esto_en_produccion", "super-secreto-kovaq"}
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "480"))
 ROLES_GESTION = ("admin", "admin_tecnico", "dueno")
+
+_AUTH_CACHE_TTL = 10.0
+_auth_cache_lock = threading.Lock()
+_auth_cache: dict = {}
+
+
+def invalidar_cache_auth(username: str | None = None):
+    with _auth_cache_lock:
+        if username:
+            _auth_cache.pop(username, None)
+        else:
+            _auth_cache.clear()
 
 
 def validar_jwt_secret(valor: str | None) -> str:
@@ -29,13 +43,27 @@ SECRET_KEY = validar_jwt_secret(os.getenv("JWT_SECRET"))
 
 
 def _buscar_usuario_activo(username: str):
-    return leer(
+    if TURSO_URL and username:
+        ahora = time.time()
+        with _auth_cache_lock:
+            cached = _auth_cache.get(username)
+            if cached and (ahora - cached["t"]) < _AUTH_CACHE_TTL:
+                return cached["u"]
+
+    row = leer(
         "SELECT u.id, u.username, u.nombre_completo, r.nombre "
         "FROM usuarios u JOIN roles r ON u.rol_id = r.id "
         "WHERE u.username = ? AND u.estado = 'activo'",
         (username,),
         uno=True,
     )
+    if TURSO_URL and username:
+        with _auth_cache_lock:
+            if row:
+                _auth_cache[username] = {"t": time.time(), "u": row}
+            else:
+                _auth_cache.pop(username, None)
+    return row
 
 
 async def obtener_usuario_actual(request: Request) -> dict:

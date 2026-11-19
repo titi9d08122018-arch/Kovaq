@@ -943,6 +943,62 @@ class CameraService:
             "empleados_excluidos": self.total_empleados_excluidos
         }
 
+    def obtener_vectores_vivos_mapa(self):
+        """Devuelve vectores vivos en memoria y handoffs sin consultar BD."""
+        ahora = time.time()
+        personas_mapa = []
+        with self.mtmc.lock:
+            for gid, tr in list(self.mtmc.global_tracks.items()):
+                if ahora - tr["last_seen"] <= 15.0:
+                    bolsa = [item["producto"] for item in self.productos_en_mano.get(gid, [])]
+                    es_cli = tr.get("es_cliente_valido", True)
+                    personas_mapa.append({
+                        "global_id": gid,
+                        "etiqueta": f"S#{gid}" if es_cli else f"STAFF#{gid}",
+                        "es_cliente_valido": es_cli,
+                        "rol_traza": tr.get("rol_traza", "Cliente (Puerta -> Caja)"),
+                        "postura_cabeza": tr.get("postura_cabeza", "Frente (Pasillo)"),
+                        "camara_actual": tr["camara_actual"],
+                        "camaras_visitadas": list(tr["camaras_visitadas"]),
+                        "x": tr["map_x"],
+                        "y": tr["map_y"],
+                        "estado_accion": tr.get("estado_accion", "En Tránsito"),
+                        "percha_actual": tr.get("percha_actual"),
+                        "productos_en_mano": bolsa,
+                        "color": "#94a3b8" if not es_cli else ("#22c55e" if not bolsa else "#FE5000"),
+                        "trayectoria": list(tr["trayectoria"])[-20:],
+                        "origen": "yolo"
+                    })
+            if self.mtmc.simulacion_activa:
+                for ag in self.mtmc.agentes_simulados:
+                    es_cli = ag.get("es_cliente_valido", True)
+                    personas_mapa.append({
+                        "global_id": ag["global_id"],
+                        "etiqueta": f"S#{ag['global_id']}" if es_cli else "STAFF",
+                        "es_cliente_valido": es_cli,
+                        "rol_traza": ag.get("rol_traza", "Cliente"),
+                        "postura_cabeza": ag.get("postura_cabeza", "Frente"),
+                        "vestimenta": ag.get("vestimenta", ""),
+                        "camara_actual": ag["camara_actual"],
+                        "camaras_visitadas": ["CAM-01", "CAM-02", "CAM-03"] if es_cli else ["CAM-01"],
+                        "x": round(ag["x"], 4),
+                        "y": round(ag["y"], 4),
+                        "estado_accion": ag["estado_accion"],
+                        "percha_actual": ag.get("percha_actual"),
+                        "productos_en_mano": list(ag["bolsa"]),
+                        "color": ag["color_hex"],
+                        "trayectoria": list(ag["historial_xy"])[-25:],
+                        "origen": "simulacion_papel"
+                    })
+            handoffs_lista = list(self.mtmc.handoffs)
+        return {
+            "camara_activa": self.camara_activa_id,
+            "simulacion_activa": self.mtmc.simulacion_activa,
+            "personas": personas_mapa,
+            "handoffs": handoffs_lista,
+            "analisis_video_10s": self.analisis_video_10s,
+        }
+
     def obtener_estado_mapa_2d(
         self,
         sucursal_id: str = None,

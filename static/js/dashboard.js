@@ -25,8 +25,8 @@
     let chartFranjasDonut = null;
 
     // Control de concurrencia sin descartar clics del usuario (AbortController por canal)
-    const controllers = { mapa: null, live: null, stats: null, pub: null, heat: null, inv: null };
-    const reqSeq = { mapa: 0, stats: 0, pub: 0, heat: 0, inv: 0 };
+    const controllers = { bundle: null, mapa: null, live: null, heat: null, inv: null };
+    const reqSeq = { bundle: 0, mapa: 0, heat: 0, inv: 0 };
 
     // Datos reales de trackeo YOLOv8n cuadro a cuadro para el video demo
     let demoTracks = null;
@@ -145,13 +145,14 @@
         moduloActivo = moduloId;
 
         if (moduloId === "tab-vivo") {
-            sincronizarMapa2D();
+            if (ultimoEstadoMapa) dibujarPlanoTienda2D(ultimoEstadoMapa);
+            else cargarBundleDashboard();
         } else if (moduloId === "tab-percha") {
             cargarHeatmaps();
         } else if (moduloId === "tab-inventario") {
-            cargarInventarioReal();
+            if (!document.querySelector(".item-inventario")) cargarInventarioReal();
         } else if (moduloId === "tab-marketing") {
-            cargarResumenEjecutivoPublicidad();
+            if (!ultimoEstadoMapa) cargarBundleDashboard();
         } else if (moduloId === "tab-config") {
             cargarConfiguracionMapa();
         }
@@ -215,20 +216,38 @@
 
     async function refrescarDashboardsPorPeriodo() {
         marcarEstadoCarga("Actualizando datos...");
-        const tareas = [
-            actualizarDatosDashboard(),
-            cargarResumenEjecutivoPublicidad(),
-            sincronizarMapa2D(),
-        ];
+        const miSeq = reqSeq.bundle + 1;
+        const tareas = [cargarBundleDashboard()];
         if (moduloActivo === "tab-percha") tareas.push(cargarHeatmaps());
-        if (moduloActivo === "tab-inventario") tareas.push(cargarInventarioReal());
         if (moduloActivo === "tab-config") tareas.push(cargarConfiguracionMapa());
         await Promise.allSettled(tareas);
-        const ahora = new Date();
-        const hh = String(ahora.getHours()).padStart(2, "0");
-        const mm = String(ahora.getMinutes()).padStart(2, "0");
-        const ss = String(ahora.getSeconds()).padStart(2, "0");
-        marcarEstadoCarga(`Actualizado ${hh}:${mm}:${ss}`);
+        if (miSeq === reqSeq.bundle) {
+            const ahora = new Date();
+            const hh = String(ahora.getHours()).padStart(2, "0");
+            const mm = String(ahora.getMinutes()).padStart(2, "0");
+            const ss = String(ahora.getSeconds()).padStart(2, "0");
+            marcarEstadoCarga(`Actualizado ${hh}:${mm}:${ss}`);
+        }
+    }
+
+    async function cargarBundleDashboard() {
+        try {
+            const { res, seq } = await fetchCancelable("bundle", `/api/dashboard_bundle?${construirQueryTemporal()}`);
+            if (!res.ok || seq !== reqSeq.bundle) return;
+            const b = await res.json();
+            if (seq !== reqSeq.bundle) return;
+
+            if (b.stats) aplicarDatosStats(b.stats);
+            if (b.resumen_publicidad) aplicarResumenPublicidad(b.resumen_publicidad);
+            if (Array.isArray(b.inventario)) renderTablaInventario(b.inventario);
+            if (b.map_state) {
+                actualizarSelectorCamaras(b.map_state.camaras || [], b.map_state.camara_activa);
+                dibujarPlanoTienda2D(b.map_state);
+                actualizarPanelesReID(b.map_state);
+            }
+        } catch (_e) {
+            // Silencioso en abort o desconexión temporal
+        }
     }
 
     function marcarBotonPresetActivo(btnActivo) {
@@ -605,7 +624,8 @@
             ctx.strokeRect(ax, ay, aw, ah);
             ctx.fillStyle = "#334155";
             ctx.font = "bold 9px 'Space Grotesk', sans-serif";
-            ctx.fillText(aten.label || "ATENCIÓN", ax + 6, ay + ah / 2 + 3);
+            ctx.textAlign = "center";
+            ctx.fillText(aten.label || "ATENCIÓN", ax + aw / 2, ay + ah / 2 + 3, aw - 8);
             ctx.restore();
         }
 
@@ -622,7 +642,8 @@
 
             ctx.fillStyle = "#1E3A8A";
             ctx.font = "bold 10px 'Space Grotesk', sans-serif";
-            ctx.fillText(cajas.nombre || "CAJAS", cx + 6, cy + 14);
+            ctx.textAlign = "center";
+            ctx.fillText(cajas.nombre || "CAJAS", cx + cw / 2, cy + 14, cw - 8);
 
             const slotH = (ch - 24) / Math.max(1, nCajas);
             for (let i = 0; i < nCajas; i++) {
@@ -634,7 +655,7 @@
                 ctx.strokeRect(cx + 8, sy + 2, cw - 16, Math.max(14, slotH - 6));
                 ctx.fillStyle = "#1E3A8A";
                 ctx.font = "bold 9px 'JetBrains Mono', monospace";
-                ctx.fillText(`POS ${i + 1}`, cx + 14, sy + Math.max(12, (slotH - 4) * 0.65));
+                ctx.fillText(`POS ${i + 1}`, cx + cw / 2, sy + Math.max(12, (slotH - 4) * 0.65));
             }
             ctx.restore();
         }
@@ -765,14 +786,17 @@
                 ctx.fill();
                 ctx.restore();
 
-                // Etiqueta de cámara
+                // Etiqueta de cámara (desplazada a la derecha cuando está cerca de la bodega superior)
                 ctx.save();
+                const nearTop = cy < 115;
+                const lblX = nearTop ? Math.min(W - 76, cx + 16) : Math.max(30, cx - 22);
+                const lblY = nearTop ? cy - 8 : cy - 24;
                 ctx.fillStyle = esActiva ? "#C23B00" : "#0C2340";
-                ctx.fillRect(cx - 22, cy - 24, 44, 15);
+                ctx.fillRect(lblX, lblY, 46, 15);
                 ctx.fillStyle = "#FFFFFF";
                 ctx.font = "bold 9px 'JetBrains Mono', monospace";
                 ctx.textAlign = "center";
-                ctx.fillText(cam.id, cx, cy - 13);
+                ctx.fillText(cam.id, lblX + 23, lblY + 11);
                 ctx.restore();
             });
         }
@@ -968,7 +992,9 @@
             camaras.forEach((c) => {
                 const o = document.createElement("option");
                 o.value = c.id;
-                o.textContent = `${c.id} • ${c.nombre.slice(0, 28)}`;
+                const partes = String(c.nombre || "").split("•");
+                const suf = partes.length > 1 ? partes[partes.length - 1].trim() : c.nombre;
+                o.textContent = `${c.id} • ${suf}`;
                 selPlano.appendChild(o);
             });
         }
@@ -1119,7 +1145,7 @@
         ctx.restore();
     }
 
-    function dibujarPersonaTracked(ctx, W, H, p) {
+    function dibujarPersonaTracked(ctx, W, H, p, etiquetasOcupadas) {
         const [nx1, ny1, nx2, ny2] = p.box;
         const x1 = nx1 * W;
         const y1 = ny1 * H;
@@ -1168,15 +1194,26 @@
             ctx.stroke();
         }
 
-        // Etiqueta superior con ID anónimo, postura y dwell en tiempo real
+        // Etiqueta superior con anti-colisión vertical para evitar solapamientos entre sujetos cercanos
         const dwellTxt = p.dwell > 0 ? ` (${p.dwell.toFixed(1)}s)` : "";
         const tag = `${p.label} | ${p.postura}${dwellTxt}`;
         ctx.font = "bold 11px 'JetBrains Mono', monospace";
         const tw = ctx.measureText(tag).width + 12;
+        const th = 20;
         const tx = Math.min(W - tw - 4, Math.max(4, x1));
-        const ty = Math.max(4, y1 - 24);
+        let ty = Math.max(4, y1 - 24);
+        if (Array.isArray(etiquetasOcupadas)) {
+            for (let intentos = 0; intentos < 4; intentos++) {
+                const choca = etiquetasOcupadas.some(
+                    (r) => tx < r.x + r.w + 4 && tx + tw + 4 > r.x && ty < r.y + r.h + 2 && ty + th + 2 > r.y
+                );
+                if (!choca) break;
+                ty = ty >= 28 ? ty - 23 : Math.min(H - th - 4, ty + 23);
+            }
+            etiquetasOcupadas.push({ x: tx, y: ty, w: tw, h: th });
+        }
         ctx.fillStyle = !esCli ? "#475569" : (enPercha ? "#C23B00" : "#047857");
-        ctx.fillRect(tx, ty, tw, 20);
+        ctx.fillRect(tx, ty, tw, th);
         ctx.fillStyle = "#FFFFFF";
         ctx.fillText(tag, tx + 6, ty + 14);
         ctx.restore();
@@ -1199,6 +1236,7 @@
             const W = canvas.width;
             const H = canvas.height;
             ctx.clearRect(0, 0, W, H);
+            const etiquetasOcupadas = [];
 
             // Modo A: Video HTML5 sincronizado cuadro a cuadro con detecciones reales YOLOv8n
             if (videoEl && demoTracks && Array.isArray(demoTracks.frames) && demoTracks.frames.length > 0) {
@@ -1219,7 +1257,7 @@
                 const personas = frameObj.p || [];
                 liveVideoPersonas = personas;
 
-                personas.forEach((p) => dibujarPersonaTracked(ctx, W, H, p));
+                personas.forEach((p) => dibujarPersonaTracked(ctx, W, H, p, etiquetasOcupadas));
 
                 const nCli = personas.filter((p) => p.cliente).length;
                 const nStaff = personas.length - nCli;
@@ -1252,7 +1290,7 @@
                         postura: pb.postura_cabeza || "En escena",
                         dwell: pb.dwell || 0,
                         gaze: null,
-                    });
+                    }, etiquetasOcupadas);
                 });
                 if (hudChip) {
                     hudChip.textContent = `YOLOv8n Live • ${(liveTelemetriaBackend.personas_box || []).length} personas • ${liveTelemetriaBackend.fps_yolo || 0} FPS`;
@@ -1344,230 +1382,197 @@
         }
     }
 
-    // KPIs Históricos (Fuente Única: /api/stats)
-    async function actualizarDatosDashboard() {
-        try {
-            const { res, seq } = await fetchCancelable("stats", `/api/stats?${construirQueryTemporal()}`);
-            if (!res.ok || seq !== reqSeq.stats) return;
-            const d = await res.json();
-            if (seq !== reqSeq.stats) return;
+    // KPIs Históricos (aplicación unificada)
+    function aplicarDatosStats(d) {
+        const traf = Number(d.trafico || 0);
+        const tom = Number(d.tomados || 0);
+        const dev = Number(d.devueltos || 0);
+        const perm = Number(d.permanencia_promedio_seg || 0);
+        const conv = traf > 0 ? Math.min(100, (tom / traf) * 100) : 0;
 
-            const traf = Number(d.trafico || 0);
-            const tom = Number(d.tomados || 0);
-            const dev = Number(d.devueltos || 0);
-            const perm = Number(d.permanencia_promedio_seg || 0);
-            const conv = traf > 0 ? Math.min(100, (tom / traf) * 100) : 0;
+        const setText = (id, val) => {
+            const el = document.getElementById(id);
+            if (el) el.textContent = val;
+        };
+        setText("stat-hist-trafico", String(traf));
+        setText("stat-hist-permanencia", `${perm.toFixed(1)} s`);
+        setText("stat-hist-tomados", String(tom));
+        setText("stat-hist-devueltos", `${dev} devueltos a último momento`);
+        setText("stat-hist-conversion", `${conv.toFixed(1)}%`);
 
-            const setText = (id, val) => {
-                const el = document.getElementById(id);
-                if (el) el.textContent = val;
-            };
-            setText("stat-hist-trafico", String(traf));
-            setText("stat-hist-permanencia", `${perm.toFixed(1)} s`);
-            setText("stat-hist-tomados", String(tom));
-            setText("stat-hist-devueltos", `${dev} devueltos a último momento`);
-            setText("stat-hist-conversion", `${conv.toFixed(1)}%`);
-
-            const bar = document.getElementById("progress-live-conversion");
-            const barWrap = document.getElementById("progress-live-conversion-bar");
-            if (bar) bar.style.width = `${conv.toFixed(1)}%`;
-            if (barWrap) barWrap.setAttribute("aria-valuenow", String(Math.round(conv)));
-        } catch (_e) {
-            // Silencioso
-        }
+        const bar = document.getElementById("progress-live-conversion");
+        const barWrap = document.getElementById("progress-live-conversion-bar");
+        if (bar) bar.style.width = `${conv.toFixed(1)}%`;
+        if (barWrap) barWrap.setAttribute("aria-valuenow", String(Math.round(conv)));
     }
 
-    // Resumen Ejecutivo de Publicidad, Comportamiento Visual, Zonas y Productos
-    async function cargarResumenEjecutivoPublicidad() {
-        try {
-            const { res, seq } = await fetchCancelable("pub", `/api/analytics/resumen_publicidad?${construirQueryTemporal()}`);
-            if (!res.ok || seq !== reqSeq.pub) return;
-            const d = await res.json();
-            if (seq !== reqSeq.pub) return;
+    function aplicarResumenPublicidad(d) {
+        const priv = d.privacidad || {};
+        const privEl = document.getElementById("exec-privacidad-resumen");
+        if (privEl) {
+            privEl.textContent = `${priv.clientes_validados_puerta_caja || 0} clientes validados Puerta a Caja • ${priv.empleados_excluidos || 0} eventos de personal excluidos.`;
+        }
 
-            const priv = d.privacidad || {};
-            const privEl = document.getElementById("exec-privacidad-resumen");
-            if (privEl) {
-                privEl.textContent = `${priv.clientes_validados_puerta_caja || 0} clientes validados Puerta a Caja • ${priv.empleados_excluidos || 0} eventos de personal excluidos.`;
+        const comp = d.comportamiento_visual || {};
+        const setPair = (idCnt, idDwell, obj) => {
+            const cEl = document.getElementById(idCnt);
+            const dEl = document.getElementById(idDwell);
+            if (cEl) cEl.textContent = String(obj?.casos || 0);
+            if (dEl) dEl.textContent = `${Number(obj?.dwell || 0).toFixed(1)} s promedio`;
+        };
+        setPair("comp-mira-compra", "comp-mira-compra-dwell", comp.mira_y_compra);
+        setPair("comp-no-mira-compra", "comp-no-mira-compra-dwell", comp.no_mira_y_compra);
+        setPair("comp-solo-mira", "comp-solo-mira-dwell", comp.solo_mira);
+        setPair("comp-devuelve", "comp-devuelve-dwell", comp.ultimo_momento_devuelve);
+
+        const post = d.postura_cabeza || {};
+        const setNum = (id, v) => {
+            const el = document.getElementById(id);
+            if (el) el.textContent = String(v || 0);
+        };
+        setNum("postura-giro", post.giro_percha);
+        setNum("postura-sube", post.sube_cabeza);
+        setNum("postura-agacha", post.se_agacha);
+
+        const renderZonas = (idLista, items, vacioTxt) => {
+            const ul = document.getElementById(idLista);
+            if (!ul) return;
+            ul.textContent = "";
+            if (!items || items.length === 0) {
+                const li = document.createElement("li");
+                li.className = "text-kovaq-slate";
+                li.textContent = vacioTxt;
+                ul.appendChild(li);
+                return;
             }
+            items.forEach((z) => {
+                const li = document.createElement("li");
+                li.className = "flex items-center justify-between gap-2";
+                const nom = document.createElement("span");
+                nom.className = "font-bold";
+                nom.textContent = `${z.id} • ${z.nombre}`;
+                const cnt = document.createElement("span");
+                cnt.className = "font-mono-num text-kovaq-slate shrink-0";
+                cnt.textContent = `${z.tomas} tomas`;
+                li.append(nom, cnt);
+                ul.appendChild(li);
+            });
+        };
+        renderZonas("lista-zonas-calientes", d.zonas_calientes, "Sin zonas calientes en este período.");
+        renderZonas("lista-zonas-frias", d.zonas_frias, "Todas las perchas tienen alta rotación en este período.");
 
-            const comp = d.comportamiento_visual || {};
-            const setPair = (idCnt, idDwell, obj) => {
-                const cEl = document.getElementById(idCnt);
-                const dEl = document.getElementById(idDwell);
-                if (cEl) cEl.textContent = String(obj?.casos || 0);
-                if (dEl) dEl.textContent = `${Number(obj?.dwell || 0).toFixed(1)} s promedio`;
-            };
-            setPair("comp-mira-compra", "comp-mira-compra-dwell", comp.mira_y_compra);
-            setPair("comp-no-mira-compra", "comp-no-mira-compra-dwell", comp.no_mira_y_compra);
-            setPair("comp-solo-mira", "comp-solo-mira-dwell", comp.solo_mira);
-            setPair("comp-devuelve", "comp-devuelve-dwell", comp.ultimo_momento_devuelve);
-
-            const post = d.postura_cabeza || {};
-            const setNum = (id, v) => {
-                const el = document.getElementById(id);
-                if (el) el.textContent = String(v || 0);
-            };
-            setNum("postura-giro", post.giro_percha);
-            setNum("postura-sube", post.sube_cabeza);
-            setNum("postura-agacha", post.se_agacha);
-
-            const renderZonas = (idLista, items) => {
-                const ul = document.getElementById(idLista);
-                if (!ul) return;
-                ul.textContent = "";
-                if (!items || items.length === 0) {
-                    const li = document.createElement("li");
-                    li.textContent = "Sin registros en este rango de fechas.";
-                    ul.appendChild(li);
-                    return;
-                }
-                items.forEach((z) => {
-                    const li = document.createElement("li");
-                    li.className = "flex items-center justify-between gap-2";
-                    const nom = document.createElement("span");
-                    nom.className = "font-bold";
-                    nom.textContent = `${z.id} • ${z.nombre}`;
-                    const cnt = document.createElement("span");
-                    cnt.className = "font-mono-num text-kovaq-slate shrink-0";
-                    cnt.textContent = `${z.tomas} tomas`;
-                    li.append(nom, cnt);
-                    ul.appendChild(li);
-                });
-            };
-            renderZonas("lista-zonas-calientes", d.zonas_calientes);
-            renderZonas("lista-zonas-frias", d.zonas_frias);
-
-            // Productos más llevados y mayor indecisión
-            const renderProdResumen = (idLista, items, keyVal, sufijo) => {
-                const ul = document.getElementById(idLista);
-                if (!ul) return;
-                ul.textContent = "";
-                const filtrados = (items || []).filter((it) => Number(it[keyVal] || 0) > 0);
-                if (filtrados.length === 0) {
-                    const li = document.createElement("li");
-                    li.className = "text-kovaq-slate";
-                    li.textContent = "Sin movimientos en el rango filtrado.";
-                    ul.appendChild(li);
-                    return;
-                }
-                filtrados.slice(0, 4).forEach((it) => {
-                    const li = document.createElement("li");
-                    li.className = "flex items-center justify-between gap-2";
-                    const nom = document.createElement("span");
-                    nom.className = "font-bold";
-                    nom.textContent = `${it.nombre} (${it.percha_id})`;
-                    const cnt = document.createElement("span");
-                    cnt.className = "font-mono-num text-kovaq-slate shrink-0";
-                    cnt.textContent = `${it[keyVal]} ${sufijo}`;
-                    li.append(nom, cnt);
-                    ul.appendChild(li);
-                });
-            };
-            renderProdResumen("lista-productos-llevados", d.productos_mas_llevados, "llevados_netos", "llevados");
-            renderProdResumen("lista-productos-indecision", d.productos_cambio_ultimo_momento, "devueltos", "devueltos");
-
-            const aiResumen = document.getElementById("motor-ai-resumen-texto");
-            if (aiResumen && d.motor_marketing_ai?.resumen_ejecutivo) {
-                aiResumen.textContent = d.motor_marketing_ai.resumen_ejecutivo;
+        const renderProdResumen = (idLista, items, keyVal, sufijo) => {
+            const ul = document.getElementById(idLista);
+            if (!ul) return;
+            ul.textContent = "";
+            const filtrados = (items || []).filter((it) => Number(it[keyVal] || 0) > 0);
+            if (filtrados.length === 0) {
+                const li = document.createElement("li");
+                li.className = "text-kovaq-slate";
+                li.textContent = "Sin movimientos en el rango filtrado.";
+                ul.appendChild(li);
+                return;
             }
+            filtrados.slice(0, 4).forEach((it) => {
+                const li = document.createElement("li");
+                li.className = "flex items-center justify-between gap-2";
+                const nom = document.createElement("span");
+                nom.className = "font-bold";
+                nom.textContent = `${it.nombre} (${it.percha_id})`;
+                const cnt = document.createElement("span");
+                cnt.className = "font-mono-num text-kovaq-slate shrink-0";
+                cnt.textContent = `${it[keyVal]} ${sufijo}`;
+                li.append(nom, cnt);
+                ul.appendChild(li);
+            });
+        };
+        renderProdResumen("lista-productos-llevados", d.productos_mas_llevados, "llevados_netos", "llevados");
+        renderProdResumen("lista-productos-indecision", d.productos_cambio_ultimo_momento, "devueltos", "devueltos");
 
-            const tbodyPromos = document.getElementById("tabla-eval-promos-body");
-            if (tbodyPromos) {
-                tbodyPromos.textContent = "";
-                const evals = d.evaluacion_promociones || [];
-                if (evals.length === 0) {
+        const aiResumen = document.getElementById("motor-ai-resumen-texto");
+        if (aiResumen && d.motor_marketing_ai?.resumen_ejecutivo) {
+            aiResumen.textContent = d.motor_marketing_ai.resumen_ejecutivo;
+        }
+
+        const tbodyPromos = document.getElementById("tabla-eval-promos-body");
+        if (tbodyPromos) {
+            tbodyPromos.textContent = "";
+            const evals = d.evaluacion_promociones || [];
+            if (evals.length === 0) {
+                const tr = document.createElement("tr");
+                const td = document.createElement("td");
+                td.colSpan = 4;
+                td.className = "p-6 text-center text-kovaq-slate";
+                td.textContent = "No hay promociones registradas para esta sucursal. Crea una en Configuración.";
+                tr.appendChild(td);
+                tbodyPromos.appendChild(tr);
+            } else {
+                evals.forEach((pr) => {
                     const tr = document.createElement("tr");
-                    const td = document.createElement("td");
-                    td.colSpan = 4;
-                    td.className = "p-6 text-center text-kovaq-slate";
-                    td.textContent = "No hay promociones registradas para esta sucursal. Crea una en Configuración.";
-                    tr.appendChild(td);
+                    tr.className = "hover:bg-slate-50";
+
+                    const tdNom = document.createElement("td");
+                    tdNom.className = "p-3";
+                    const t1 = document.createElement("strong");
+                    t1.className = "block text-kovaq-navy";
+                    t1.textContent = `${pr.percha_id} • ${pr.titulo}`;
+                    const t2 = document.createElement("span");
+                    t2.className = "text-kovaq-slate";
+                    t2.textContent = `${pr.producto} (${pr.tipo_publicidad}, -${pr.descuento_pct}%)`;
+                    tdNom.append(t1, t2);
+
+                    const tdCnt = document.createElement("td");
+                    tdCnt.className = "p-3 font-mono-num";
+                    tdCnt.textContent = `${pr.tomas} / ${pr.devueltos}`;
+
+                    const tdRet = document.createElement("td");
+                    tdRet.className = "p-3 font-mono-num font-bold text-emerald-800";
+                    tdRet.textContent = `${pr.efectividad_pct}%`;
+
+                    const tdDiag = document.createElement("td");
+                    tdDiag.className = "p-3";
+                    const st = document.createElement("strong");
+                    st.className = "block text-kovaq-orange";
+                    st.textContent = pr.estado_efecto;
+                    const dg = document.createElement("span");
+                    dg.className = "text-kovaq-slate";
+                    dg.textContent = pr.diagnostico;
+                    tdDiag.append(st, dg);
+
+                    tr.append(tdNom, tdCnt, tdRet, tdDiag);
                     tbodyPromos.appendChild(tr);
-                } else {
-                    evals.forEach((pr) => {
-                        const tr = document.createElement("tr");
-                        tr.className = "hover:bg-slate-50";
-
-                        const tdNom = document.createElement("td");
-                        tdNom.className = "p-3";
-                        const t1 = document.createElement("strong");
-                        t1.className = "block text-kovaq-navy";
-                        t1.textContent = `${pr.percha_id} • ${pr.titulo}`;
-                        const t2 = document.createElement("span");
-                        t2.className = "text-kovaq-slate";
-                        t2.textContent = `${pr.producto} (${pr.tipo_publicidad}, -${pr.descuento_pct}%)`;
-                        tdNom.append(t1, t2);
-
-                        const tdCnt = document.createElement("td");
-                        tdCnt.className = "p-3 font-mono-num";
-                        tdCnt.textContent = `${pr.tomas} / ${pr.devueltos}`;
-
-                        const tdRet = document.createElement("td");
-                        tdRet.className = "p-3 font-mono-num font-bold text-emerald-800";
-                        tdRet.textContent = `${pr.efectividad_pct}%`;
-
-                        const tdDiag = document.createElement("td");
-                        tdDiag.className = "p-3";
-                        const st = document.createElement("strong");
-                        st.className = "block text-kovaq-orange";
-                        st.textContent = pr.estado_efecto;
-                        const dg = document.createElement("span");
-                        dg.className = "text-kovaq-slate";
-                        dg.textContent = pr.diagnostico;
-                        tdDiag.append(st, dg);
-
-                        tr.append(tdNom, tdCnt, tdRet, tdDiag);
-                        tbodyPromos.appendChild(tr);
-                    });
-                }
+                });
             }
-        } catch (_e) {
-            // Silencioso
         }
     }
 
-    // Gráficos Chart.js + Perfiles + Top Productos (enlazados a horas, días, semanas, meses y sucursal)
+    async function cargarResumenEjecutivoPublicidad() {
+        await cargarBundleDashboard();
+    }
+
+    // Analítica consolidada en 1 sola petición HTTP (/api/analytics/bundle)
     async function cargarHeatmaps() {
         if (typeof Chart === "undefined") return;
-        if (controllers.heat) {
-            try { controllers.heat.abort(); } catch (_e) { /* ignore */ }
-        }
-        const ctrl = new AbortController();
-        controllers.heat = ctrl;
-        reqSeq.heat += 1;
-        const mySeq = reqSeq.heat;
-
-        const qBase = construirQueryTemporal();
         const qSerie = construirQueryTemporal({ agrupacion: filtroTemporal.agrupacion || "semana" });
         try {
-            const [resHora, resMatriz, resFranjas, resSerie, resPerfiles, resTop] = await Promise.all([
-                fetch(`/api/analytics/heatmap/hora?${qBase}`, { signal: ctrl.signal }),
-                fetch(`/api/analytics/heatmap/matriz?${qBase}`, { signal: ctrl.signal }),
-                fetch(`/api/analytics/horarios/franjas?${qBase}`, { signal: ctrl.signal }),
-                fetch(`/api/analytics/serie_temporal?${qSerie}`, { signal: ctrl.signal }),
-                fetch(`/api/analytics/perfiles?${qBase}`, { signal: ctrl.signal }),
-                fetch(`/api/analytics/productos/top?limite=6&${qBase}`, { signal: ctrl.signal }),
-            ]);
-            if (mySeq !== reqSeq.heat) return;
+            const { res, seq } = await fetchCancelable("heat", `/api/analytics/bundle?${qSerie}`);
+            if (!res.ok || seq !== reqSeq.heat) return;
+            const data = await res.json();
+            if (seq !== reqSeq.heat) return;
 
-            if (resSerie.ok) renderGraficoSerieTemporal(await resSerie.json());
-            if (resHora.ok) {
-                const dh = await resHora.json();
-                renderGraficoHeatmapHora(dh.labels || [], dh.data || []);
+            if (data.serie_temporal) renderGraficoSerieTemporal(data.serie_temporal);
+            if (data.heatmap_hora) renderGraficoHeatmapHora(data.heatmap_hora.labels || [], data.heatmap_hora.data || []);
+            if (data.franjas) {
+                renderDonutFranjas(data.franjas);
+                actualizarTarjetasFranjas(data.franjas);
             }
-            if (resFranjas.ok) {
-                const df = await resFranjas.json();
-                renderDonutFranjas(df);
-                actualizarTarjetasFranjas(df);
-            }
-            if (resMatriz.ok) {
-                datosMatrizGlobal = await resMatriz.json();
+            if (data.heatmap_matriz) {
+                datosMatrizGlobal = data.heatmap_matriz;
                 actualizarInsightsMatriz(datosMatrizGlobal);
                 renderizarMatrizSegunModo(datosMatrizGlobal);
             }
-            if (resPerfiles.ok) renderPerfilesPermanencia((await resPerfiles.json()).perfiles || []);
-            if (resTop.ok) renderTopProductosAnalitica((await resTop.json()).productos || []);
+            if (data.perfiles) renderPerfilesPermanencia(data.perfiles);
+            if (data.top_productos) renderTopProductosAnalitica(data.top_productos);
         } catch (_e) {
             // Silencioso en abort
         }
@@ -1770,10 +1775,10 @@
         const trHead = document.createElement("tr");
 
         if (modoVistaMatriz === "franjas") {
-            ["Día", "Mañana (06-11h)", "Mediodía (11-14h)", "Tarde (14-18h)", "Noche (18-23h)", "Total Día"].forEach((h) => {
+            ["Día", "Mañana (06-11h)", "Mediodía (11-14h)", "Tarde (14-18h)", "Noche (18-23h)", "Madrugada (23-05h)", "Total Día"].forEach((h) => {
                 const th = document.createElement("th");
                 th.scope = "col";
-                th.className = "p-2.5";
+                th.className = "p-2.5 whitespace-nowrap";
                 th.textContent = h;
                 trHead.appendChild(th);
             });
@@ -1787,9 +1792,9 @@
                 thDia.className = "p-2.5 font-bold text-kovaq-navy";
                 thDia.textContent = row.dia;
                 tr.appendChild(thDia);
-                ["manana", "mediodia", "tarde", "noche", "total"].forEach((k) => {
+                ["manana", "mediodia", "tarde", "noche", "madrugada", "total"].forEach((k) => {
                     const td = document.createElement("td");
-                    td.className = "p-2.5 font-mono-num";
+                    td.className = k === "total" ? "p-2.5 font-mono-num font-bold text-kovaq-navy" : "p-2.5 font-mono-num";
                     td.textContent = String(row[k] || 0);
                     tr.appendChild(td);
                 });
@@ -1836,90 +1841,101 @@
     }
 
     // Inventario y Planograma
+    function renderTablaInventario(items) {
+        const tbody = document.getElementById("tabla-inventario-body");
+        if (!tbody) return;
+        tbody.textContent = "";
+
+        if (!items || items.length === 0) {
+            const tr = document.createElement("tr");
+            const td = document.createElement("td");
+            td.colSpan = 7;
+            td.className = "p-6 text-center text-kovaq-slate";
+            td.textContent = "No hay productos en el planograma de esta sucursal.";
+            tr.appendChild(td);
+            tbody.appendChild(tr);
+            filtrarInventarioLocal();
+            return;
+        }
+
+        items.forEach((p) => {
+            const tr = document.createElement("tr");
+            tr.className = "hover:bg-slate-50 item-inventario";
+            tr.dataset.nombre = `${p.nombre} ${p.categoria} ${p.percha_id} ${p.sucursal_id || ""}`.toLowerCase();
+            tr.dataset.categoria = p.categoria;
+
+            const tdProd = document.createElement("td");
+            tdProd.className = "p-3 font-bold text-kovaq-navy";
+            const spNom = document.createElement("span");
+            spNom.className = "block";
+            spNom.textContent = p.nombre;
+            const spSub = document.createElement("span");
+            spSub.className = "text-[11px] font-mono-num text-kovaq-slate";
+            spSub.textContent = `${p.percha_id} • ${p.nivel} (${p.sucursal_id || "SUC-NORTE"})`;
+            tdProd.append(spNom, spSub);
+
+            const tdCat = document.createElement("td");
+            tdCat.className = "p-3";
+            const spCat = document.createElement("span");
+            spCat.className = "bg-slate-100 text-kovaq-navy px-2 py-0.5 rounded font-bold whitespace-nowrap";
+            spCat.textContent = p.categoria;
+            tdCat.appendChild(spCat);
+
+            const tdStock = document.createElement("td");
+            tdStock.className = "p-3 font-mono-num whitespace-nowrap";
+            tdStock.textContent = `${p.stock} u.`;
+
+            const tdTomas = document.createElement("td");
+            tdTomas.className = "p-3 font-mono-num font-bold whitespace-nowrap";
+            tdTomas.textContent = `${p.tomas} tomas (${p.devueltos} dev.)`;
+
+            const tdEvac = document.createElement("td");
+            tdEvac.className = "p-3 font-mono-num font-bold text-emerald-800 whitespace-nowrap";
+            tdEvac.textContent = `${p.tasa_evacuacion}%`;
+
+            const tdEst = document.createElement("td");
+            tdEst.className = "p-3";
+            const spEst = document.createElement("span");
+            const estTxt = String(p.estado || "");
+            if (estTxt.includes("Crítico")) {
+                spEst.className = "inline-block bg-red-100 text-red-900 px-2 py-0.5 rounded font-bold whitespace-nowrap";
+            } else if (estTxt.includes("Indecisión")) {
+                spEst.className = "inline-block bg-amber-100 text-amber-900 px-2 py-0.5 rounded font-bold whitespace-nowrap";
+            } else if (estTxt.includes("Fría")) {
+                spEst.className = "inline-block bg-blue-100 text-blue-900 px-2 py-0.5 rounded font-bold whitespace-nowrap";
+            } else if (estTxt.includes("Caliente")) {
+                spEst.className = "inline-block bg-orange-100 text-kovaq-orange px-2 py-0.5 rounded font-bold whitespace-nowrap";
+            } else {
+                spEst.className = "inline-block bg-emerald-100 text-emerald-900 px-2 py-0.5 rounded font-bold whitespace-nowrap";
+            }
+            spEst.textContent = estTxt;
+            tdEst.appendChild(spEst);
+
+            const tdAcc = document.createElement("td");
+            tdAcc.className = "p-3 text-right";
+            const btnAds = document.createElement("button");
+            btnAds.type = "button";
+            btnAds.className = "btn-kovaq-outline min-h-[34px] text-xs whitespace-nowrap";
+            btnAds.textContent = "Analizar con IA";
+            btnAds.addEventListener("click", () => {
+                preguntarIARapido(`Optimizar publicidad para ${p.nombre} en ${p.percha_id}`);
+            });
+            tdAcc.appendChild(btnAds);
+
+            tr.append(tdProd, tdCat, tdStock, tdTomas, tdEvac, tdEst, tdAcc);
+            tbody.appendChild(tr);
+        });
+
+        filtrarInventarioLocal();
+    }
+
     async function cargarInventarioReal() {
         try {
             const { res, seq } = await fetchCancelable("inv", `/api/analytics/inventario?${construirQueryTemporal()}`);
             if (!res.ok || seq !== reqSeq.inv) return;
             const data = await res.json();
             if (seq !== reqSeq.inv) return;
-
-            const items = data.productos || [];
-            const tbody = document.getElementById("tabla-inventario-body");
-            if (!tbody) return;
-            tbody.textContent = "";
-
-            if (items.length === 0) {
-                const tr = document.createElement("tr");
-                const td = document.createElement("td");
-                td.colSpan = 7;
-                td.className = "p-6 text-center text-kovaq-slate";
-                td.textContent = "No hay productos en el planograma de esta sucursal.";
-                tr.appendChild(td);
-                tbody.appendChild(tr);
-                filtrarInventarioLocal();
-                return;
-            }
-
-            items.forEach((p) => {
-                const tr = document.createElement("tr");
-                tr.className = "hover:bg-slate-50 item-inventario";
-                tr.dataset.nombre = `${p.nombre} ${p.categoria} ${p.percha_id} ${p.sucursal_id || ""}`.toLowerCase();
-                tr.dataset.categoria = p.categoria;
-
-                const tdProd = document.createElement("td");
-                tdProd.className = "p-3 font-bold text-kovaq-navy";
-                const spNom = document.createElement("span");
-                spNom.className = "block";
-                spNom.textContent = p.nombre;
-                const spSub = document.createElement("span");
-                spSub.className = "text-[11px] font-mono-num text-kovaq-slate";
-                spSub.textContent = `${p.percha_id} • ${p.nivel} (${p.sucursal_id || "SUC-NORTE"})`;
-                tdProd.append(spNom, spSub);
-
-                const tdCat = document.createElement("td");
-                tdCat.className = "p-3";
-                const spCat = document.createElement("span");
-                spCat.className = "bg-slate-100 text-kovaq-navy px-2 py-0.5 rounded font-bold";
-                spCat.textContent = p.categoria;
-                tdCat.appendChild(spCat);
-
-                const tdStock = document.createElement("td");
-                tdStock.className = "p-3 font-mono-num";
-                tdStock.textContent = `${p.stock} u.`;
-
-                const tdTomas = document.createElement("td");
-                tdTomas.className = "p-3 font-mono-num font-bold";
-                tdTomas.textContent = `${p.tomas} tomas (${p.devueltos} dev.)`;
-
-                const tdEvac = document.createElement("td");
-                tdEvac.className = "p-3 font-mono-num font-bold text-emerald-800";
-                tdEvac.textContent = `${p.tasa_evacuacion}%`;
-
-                const tdEst = document.createElement("td");
-                tdEst.className = "p-3";
-                const spEst = document.createElement("span");
-                spEst.className = String(p.estado || "").includes("Crítico") || String(p.estado || "").includes("Indecisión")
-                    ? "bg-red-100 text-red-900 px-2 py-0.5 rounded font-bold"
-                    : "bg-emerald-100 text-emerald-900 px-2 py-0.5 rounded font-bold";
-                spEst.textContent = p.estado;
-                tdEst.appendChild(spEst);
-
-                const tdAcc = document.createElement("td");
-                tdAcc.className = "p-3 text-right";
-                const btnAds = document.createElement("button");
-                btnAds.type = "button";
-                btnAds.className = "btn-kovaq-outline min-h-[34px] text-xs";
-                btnAds.textContent = "Analizar con IA";
-                btnAds.addEventListener("click", () => {
-                    preguntarIARapido(`Optimizar publicidad para ${p.nombre} en ${p.percha_id}`);
-                });
-                tdAcc.appendChild(btnAds);
-
-                tr.append(tdProd, tdCat, tdStock, tdTomas, tdEvac, tdEst, tdAcc);
-                tbody.appendChild(tr);
-            });
-
-            filtrarInventarioLocal();
+            renderTablaInventario(data.productos || []);
         } catch (_e) {
             // Silencioso
         }
@@ -2113,8 +2129,12 @@
             const data = await res.json().catch(() => ({}));
             if (!res.ok) throw new Error(data.detail || "Error consultando IA");
             if (burbujaIA) burbujaIA.querySelector(".texto").textContent = data.respuesta || "Sin respuesta.";
+            const cont = document.getElementById("chat-messages");
+            if (cont) cont.scrollTop = cont.scrollHeight;
         } catch (err) {
             if (burbujaIA) burbujaIA.querySelector(".texto").textContent = `Error: ${err.message}`;
+            const cont = document.getElementById("chat-messages");
+            if (cont) cont.scrollTop = cont.scrollHeight;
         } finally {
             if (btn) btn.disabled = false;
         }

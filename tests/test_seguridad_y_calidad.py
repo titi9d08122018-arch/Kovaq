@@ -147,6 +147,26 @@ def test_sucursales_filtro_horario_y_mapa_calor_enlazado(client):
     assert len(top_items) >= 3
     assert top_items[0]["interacciones"] >= 10
     assert "(VEC-" not in top_items[0]["nombre"]
+    assert "[PER-" not in top_items[0]["nombre"]
+
+    # 4c. Endpoints consolidados de alta velocidad (/api/dashboard_bundle y /api/analytics/bundle)
+    r_bun = client.get("/api/dashboard_bundle?dias=30&sucursal_id=SUC-NORTE")
+    assert r_bun.status_code == 200
+    bun = r_bun.json()
+    assert bun["stats"]["trafico"] >= bun["stats"]["tomados"]
+    assert bun["stats"]["devueltos"] == bun["resumen_publicidad"]["comportamiento_visual"]["ultimo_momento_devuelve"]["casos"]
+    cal_ids = {z["id"] for z in bun["resumen_publicidad"]["zonas_calientes"]}
+    fri_ids = {z["id"] for z in bun["resumen_publicidad"]["zonas_frias"]}
+    assert cal_ids.isdisjoint(fri_ids)
+
+    r_abun = client.get("/api/analytics/bundle?agrupacion=semana&dias=30&sucursal_id=SUC-NORTE")
+    assert r_abun.status_code == 200
+    abun = r_abun.json()
+    assert len(abun["serie_temporal"]["labels"]) >= 3
+    for fk in ("manana", "tarde", "noche"):
+        assert 0.0 <= abun["franjas"][fk]["conversion"] <= 100.0
+    for row in abun["heatmap_matriz"]["resumen_franjas"]:
+        assert row["manana"] + row["mediodia"] + row["tarde"] + row["noche"] + row["madrugada"] == row["total"]
 
     # 5. Polígonos en perspectiva y trackeo real del video demo
     import json, os

@@ -16,13 +16,14 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
 
-from ai_agent import preguntar_a_los_datos
+from ai_agent import KovaqMarketingAnalyticsEngine, preguntar_a_los_datos
 from analytics import router as analytics_router
 from auth import (
     ACCESS_TOKEN_EXPIRE_MINUTES,
     ALGORITHM,
     ROLES_GESTION,
     SECRET_KEY,
+    invalidar_cache_auth,
     obtener_usuario_actual,
     requerir_roles,
     validar_jwt_secret,
@@ -35,7 +36,9 @@ from database import (
     escribir,
     init_analytics,
     init_db,
+    invalidar_cache_metadatos,
     leer,
+    obtener_bundle_dashboard,
     obtener_camaras_mapa,
     obtener_perchas_mapa,
     obtener_promociones_percha,
@@ -361,6 +364,7 @@ async def eliminar_usuario(usuario_id: int, user: dict = Depends(_exigir_gestion
     if objetivo and objetivo[0] == "admin" and user["rol"] != "admin":
         raise HTTPException(status_code=403, detail="Solo un administrador puede eliminar a otro administrador")
     await asyncio.to_thread(escribir, "DELETE FROM usuarios WHERE id = ?", (usuario_id,))
+    invalidar_cache_auth()
     return RedirectResponse(url="/usuarios", status_code=303)
 
 
@@ -385,8 +389,49 @@ async def api_guardar_sucursal(payload: SucursalIn, _user: dict = Depends(_exigi
         payload.formato.strip(),
         payload.area_m2,
     )
+    invalidar_cache_metadatos()
     sucursales = await asyncio.to_thread(obtener_sucursales)
     return {"ok": True, "sucursal_id": suc_id, "sucursales": sucursales}
+
+
+@app.get("/api/dashboard_bundle")
+async def api_dashboard_bundle(
+    request: Request,
+    sucursal_id: str | None = Query(None, max_length=32),
+    dias: int = Query(30, ge=1, le=365),
+    horas: int | None = Query(None, ge=1, le=168),
+    fecha_inicio: str | None = Query(None, pattern=_FECHA_PAT),
+    fecha_fin: str | None = Query(None, pattern=_FECHA_PAT),
+    hora_inicio: int | None = Query(None, ge=0, le=23),
+    hora_fin: int | None = Query(None, ge=0, le=23),
+):
+    """Endpoint unificado de alta velocidad: KPIs, resumen POP, inventario y mapa arquitectónico en 3 queries."""
+    await obtener_usuario_actual(request)
+    try:
+        bundle = await asyncio.to_thread(
+            obtener_bundle_dashboard,
+            dias, fecha_inicio, fecha_fin, horas, hora_inicio, hora_fin, sucursal_id,
+        )
+    except ValueError as err:
+        raise HTTPException(status_code=400, detail=str(err))
+
+    resumen_pub = bundle["resumen_publicidad"]
+    resumen_pub["motor_marketing_ai"] = KovaqMarketingAnalyticsEngine.generar_diagnostico_integral(resumen_pub)
+
+    vivos = camara.obtener_vectores_vivos_mapa()
+    mapa_base = bundle["mapa_base"]
+    cams_seguras = [{**c, "ruta": _redactar_ruta_rtsp(c.get("ruta", ""))} for c in mapa_base.get("camaras", [])]
+    map_state = {
+        **mapa_base,
+        **vivos,
+        "camaras": cams_seguras,
+    }
+    return {
+        "stats": bundle["stats"],
+        "resumen_publicidad": resumen_pub,
+        "inventario": bundle["inventario"],
+        "map_state": map_state,
+    }
 
 
 @app.post("/api/simulation/reseed")
@@ -460,6 +505,7 @@ async def api_guardar_camara(payload: CamaraIn, _user: dict = Depends(_exigir_ge
         payload.angulo,
         payload.sucursal_id,
     )
+    invalidar_cache_metadatos()
     await asyncio.to_thread(camara.recargar_mapa_tienda)
     cams = await asyncio.to_thread(obtener_camaras_mapa, payload.sucursal_id)
     return {"ok": True, "camaras": [{**c, "ruta": _redactar_ruta_rtsp(c.get("ruta", ""))} for c in cams]}
@@ -468,6 +514,7 @@ async def api_guardar_camara(payload: CamaraIn, _user: dict = Depends(_exigir_ge
 @app.delete("/api/cameras/{cam_id}")
 async def api_borrar_camara(cam_id: str, sucursal_id: str | None = Query(None, max_length=32), _user: dict = Depends(_exigir_gestion)):
     await asyncio.to_thread(eliminar_camara_mapa, cam_id)
+    invalidar_cache_metadatos()
     await asyncio.to_thread(camara.recargar_mapa_tienda)
     cams = await asyncio.to_thread(obtener_camaras_mapa, sucursal_id)
     return {"ok": True, "camaras": [{**c, "ruta": _redactar_ruta_rtsp(c.get("ruta", ""))} for c in cams]}
@@ -511,6 +558,7 @@ async def api_guardar_percha(payload: PerchaIn, _user: dict = Depends(_exigir_ge
         payload.color,
         payload.sucursal_id,
     )
+    invalidar_cache_metadatos()
     await asyncio.to_thread(camara.recargar_mapa_tienda)
     perchas = await asyncio.to_thread(obtener_perchas_mapa, 30, None, None, None, None, None, None, payload.sucursal_id)
     return {"ok": True, "perchas": perchas}
@@ -537,6 +585,7 @@ async def api_guardar_promocion(payload: PromocionIn, _user: dict = Depends(_exi
         payload.descuento_pct,
         payload.sucursal_id,
     )
+    invalidar_cache_metadatos()
     await asyncio.to_thread(camara.recargar_mapa_tienda)
     promos = await asyncio.to_thread(obtener_promociones_percha, payload.sucursal_id)
     return {"ok": True, "promociones": promos}
@@ -545,6 +594,7 @@ async def api_guardar_promocion(payload: PromocionIn, _user: dict = Depends(_exi
 @app.delete("/api/promotions/{promo_id}")
 async def api_borrar_promocion(promo_id: str, sucursal_id: str | None = Query(None, max_length=32), _user: dict = Depends(_exigir_gestion)):
     await asyncio.to_thread(eliminar_promocion_percha, promo_id)
+    invalidar_cache_metadatos()
     await asyncio.to_thread(camara.recargar_mapa_tienda)
     promos = await asyncio.to_thread(obtener_promociones_percha, sucursal_id)
     return {"ok": True, "promociones": promos}

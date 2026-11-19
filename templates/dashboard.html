@@ -71,35 +71,45 @@
                     </div>
 
                     <div class="flex flex-wrap items-center gap-2 text-xs">
-                        <label for="filtro-hora-inicio" class="font-bold text-kovaq-navy">Horas:</label>
-                        <select id="filtro-hora-inicio" class="kovaq-select min-h-[36px] py-1 px-2 text-xs font-mono-num" aria-label="Hora de inicio">
-                            <option value="">Desde 00:00</option>
-                            {% for h in range(24) %}
-                            <option value="{{ h }}">{{ "%02d:00"|format(h) }}</option>
-                            {% endfor %}
-                        </select>
-                        <span class="text-kovaq-slate font-bold">a</span>
-                        <select id="filtro-hora-fin" class="kovaq-select min-h-[36px] py-1 px-2 text-xs font-mono-num" aria-label="Hora de fin">
-                            <option value="">Hasta 23:59</option>
-                            {% for h in range(24) %}
-                            <option value="{{ h }}">{{ "%02d:59"|format(h) }}</option>
-                            {% endfor %}
-                        </select>
+                        <span class="inline-flex items-center gap-1.5">
+                            <label for="filtro-hora-inicio" class="font-bold text-kovaq-navy whitespace-nowrap">Horas:</label>
+                            <select id="filtro-hora-inicio" class="kovaq-select min-h-[36px] py-1 px-2 text-xs font-mono-num" aria-label="Hora de inicio">
+                                <option value="">Desde 00:00</option>
+                                {% for h in range(24) %}
+                                <option value="{{ h }}">{{ "%02d:00"|format(h) }}</option>
+                                {% endfor %}
+                            </select>
+                        </span>
+                        <span class="inline-flex items-center gap-1.5">
+                            <span class="text-kovaq-slate font-bold">a</span>
+                            <select id="filtro-hora-fin" class="kovaq-select min-h-[36px] py-1 px-2 text-xs font-mono-num" aria-label="Hora de fin">
+                                <option value="">Hasta 23:59</option>
+                                {% for h in range(24) %}
+                                <option value="{{ h }}">{{ "%02d:59"|format(h) }}</option>
+                                {% endfor %}
+                            </select>
+                        </span>
                     </div>
                 </div>
 
                 <div class="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-kovaq-border text-xs">
                     <div class="flex flex-wrap items-center gap-2">
-                        <label for="filtro-fecha-inicio" class="font-bold text-kovaq-navy">Desde fecha</label>
-                        <input type="date" id="filtro-fecha-inicio" class="kovaq-input min-h-[36px] py-1 px-2 text-xs font-mono-num">
-                        <label for="filtro-fecha-fin" class="font-bold text-kovaq-navy">Hasta fecha</label>
-                        <input type="date" id="filtro-fecha-fin" class="kovaq-input min-h-[36px] py-1 px-2 text-xs font-mono-num">
-                        <button type="button" id="btn-aplicar-rango" class="btn-kovaq-primary min-h-[36px] text-xs px-3.5">
-                            Aplicar filtro
-                        </button>
-                        <button type="button" id="btn-limpiar-filtros" class="btn-kovaq-outline min-h-[36px] text-xs">
-                            Limpiar
-                        </button>
+                        <span class="inline-flex items-center gap-1.5">
+                            <label for="filtro-fecha-inicio" class="font-bold text-kovaq-navy whitespace-nowrap">Desde fecha</label>
+                            <input type="date" id="filtro-fecha-inicio" class="kovaq-input min-h-[36px] py-1 px-2 text-xs font-mono-num">
+                        </span>
+                        <span class="inline-flex items-center gap-1.5">
+                            <label for="filtro-fecha-fin" class="font-bold text-kovaq-navy whitespace-nowrap">Hasta fecha</label>
+                            <input type="date" id="filtro-fecha-fin" class="kovaq-input min-h-[36px] py-1 px-2 text-xs font-mono-num">
+                        </span>
+                        <div class="inline-flex items-center gap-1.5">
+                            <button type="button" id="btn-aplicar-rango" class="btn-kovaq-primary min-h-[36px] text-xs px-3.5 whitespace-nowrap">
+                                Aplicar filtro
+                            </button>
+                            <button type="button" id="btn-limpiar-filtros" class="btn-kovaq-outline min-h-[36px] text-xs whitespace-nowrap">
+                                Limpiar
+                            </button>
+                        </div>
                     </div>
                     <span id="indicador-carga-datos" role="status" aria-live="polite" class="text-xs font-mono-num font-bold text-kovaq-slate">
                         Sincronizado
@@ -203,7 +213,7 @@
                     </button>
                 </div>
 
-                <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <div class="space-y-2.5">
                     <div>
                         <label for="select-camara-mapa" class="block text-xs font-bold text-kovaq-navy mb-1">Cámara en plano</label>
                         <select id="select-camara-mapa" class="kovaq-select w-full text-xs">
@@ -214,13 +224,13 @@
                     </div>
                     <div>
                         <label for="select-camara" class="block text-xs font-bold text-kovaq-navy mb-1">Fuente de video</label>
-                        <div class="flex gap-1.5">
-                            <select id="select-camara" class="kovaq-select w-full text-xs">
+                        <div class="flex items-center gap-2">
+                            <select id="select-camara" class="kovaq-select flex-1 min-w-0 text-xs">
                                 <option value="video">Video Demo (10s)</option>
                                 <option value="webcam">Cámara Web USB</option>
                                 <option value="rtsp">Cámara IP (RTSP)</option>
                             </select>
-                            <button type="button" id="btn-conectar-fuente" class="btn-kovaq-outline text-xs shrink-0">
+                            <button type="button" id="btn-conectar-fuente" class="btn-kovaq-outline text-xs shrink-0 whitespace-nowrap">
                                 Conectar
                             </button>
                         </div>
@@ -258,7 +268,7 @@
                             <span>Analizar archivo</span>
                         </button>
                     </div>
-                    <input type="file" id="archivo-input" accept=".mp4,.avi,.mov,.mkv,.jpg,.jpeg,.png,.webp" class="text-xs text-kovaq-navy file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border file:border-kovaq-control file:bg-white file:text-kovaq-navy file:font-bold">
+                    <input type="file" id="archivo-input" accept=".mp4,.avi,.mov,.mkv,.jpg,.jpeg,.png,.webp" class="w-full max-w-full text-xs text-kovaq-navy file:mr-2 file:py-1.5 file:px-3 file:rounded-lg file:border file:border-kovaq-control file:bg-white file:text-kovaq-navy file:font-bold">
                     <div id="upload-status" role="status" aria-live="polite" class="text-xs font-semibold text-kovaq-slate min-h-[18px]"></div>
                 </div>
             </div>
@@ -371,7 +381,7 @@
         </div>
 
         <!-- Registro de continuidad multi-cámara y vectores en escena -->
-        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
             <div class="card-kovaq p-5">
                 <h3 class="text-sm font-extrabold text-kovaq-navy font-title m-0 mb-3">
                     Personas y vectores anónimos en tienda (tiempo real)
@@ -466,7 +476,7 @@
         </div>
 
         <!-- Perfiles de permanencia y Top productos del período -->
-        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
             <div class="card-kovaq p-5 space-y-3">
                 <h3 class="text-sm sm:text-base font-extrabold text-kovaq-navy font-title m-0">
                     Perfiles de permanencia frente a góndola
@@ -738,7 +748,7 @@
             </div>
         </div>
 
-        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
             <!-- Formulario de Cámaras -->
             <div class="card-kovaq p-5 space-y-4">
                 <div class="flex items-center justify-between">

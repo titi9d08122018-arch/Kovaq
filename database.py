@@ -2,6 +2,7 @@ import os
 import re
 import json
 import math
+import time
 import logging
 import threading
 import asyncio
@@ -19,7 +20,17 @@ ADMIN_PASSWORD_MIN = 12
 
 _FECHA_ISO_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _COLUMNAS_FECHA_VALIDAS = {"creado"}
-_SEED_VERSION = "v3_multisucursal_horario"
+_SEED_VERSION = "v4_limpio_coherente"
+
+# Caché breve de metadatos estáticos (sucursales, cámaras, perchas, catálogo, promociones)
+_META_CACHE_TTL = 30.0
+_meta_cache_lock = threading.Lock()
+_meta_cache: dict = {}
+
+
+def invalidar_cache_metadatos():
+    with _meta_cache_lock:
+        _meta_cache.clear()
 
 # Polígonos en perspectiva calibrados al video demo_supermercado.mp4 (16:9)
 POLY_PER_A1 = [[0.000, 0.285], [0.432, 0.285], [0.432, 0.548], [0.205, 1.000], [0.000, 1.000]]
@@ -255,19 +266,19 @@ def _plano_arquitectonico_norte():
     return {
         "nombre_plano": "Planta Baja • Formato Hipermercado (1,450 m²)",
         "dimensiones_m": [42, 24],
-        "bodega": {"x": 0.03, "y": 0.04, "w": 0.94, "h": 0.11, "label": "BODEGA / REPOSICIÓN (SOLO PERSONAL)"},
-        "puerta_entrada": {"x": 0.02, "y": 0.30, "w": 0.055, "h": 0.40, "nombre": "ACCESO PRINCIPAL"},
-        "linea_cajas": {"x": 0.86, "y": 0.50, "w": 0.105, "h": 0.42, "nombre": "CAJAS (4 POS)", "cajas": 4},
-        "zona_atencion": {"x": 0.86, "y": 0.19, "w": 0.105, "h": 0.24, "label": "ATENCIÓN / RETIRO"},
-        "columnas": [[0.38, 0.48], [0.68, 0.48], [0.38, 0.85], [0.68, 0.85]],
+        "bodega": {"x": 0.03, "y": 0.04, "w": 0.94, "h": 0.10, "label": "BODEGA / REPOSICIÓN (SOLO PERSONAL)"},
+        "puerta_entrada": {"x": 0.025, "y": 0.30, "w": 0.055, "h": 0.40, "nombre": "ACCESO PRINCIPAL"},
+        "linea_cajas": {"x": 0.835, "y": 0.46, "w": 0.125, "h": 0.46, "nombre": "CAJAS (4 POS)", "cajas": 4},
+        "zona_atencion": {"x": 0.835, "y": 0.18, "w": 0.125, "h": 0.24, "label": "ATENCIÓN / RETIRO"},
+        "columnas": [[0.365, 0.50], [0.645, 0.50], [0.365, 0.86], [0.645, 0.86]],
         "pasillos": [
-            {"label": "PASILLO 1 • DESAYUNO Y CONSERVAS", "x": 0.14, "y": 0.48},
-            {"label": "PASILLO 2 • BEBIDAS Y LÁCTEOS", "x": 0.46, "y": 0.48},
-            {"label": "CORREDOR CAJAS Y HOGAR", "x": 0.72, "y": 0.87},
+            {"label": "PASILLO 1 • DESAYUNO Y CONSERVAS", "x": 0.11, "y": 0.50},
+            {"label": "PASILLO 2 • BEBIDAS Y LÁCTEOS", "x": 0.41, "y": 0.50},
+            {"label": "CORREDOR CAJAS Y HOGAR", "x": 0.66, "y": 0.88},
         ],
         "cabeceras": [
-            {"x": 0.37, "y": 0.24, "w": 0.035, "h": 0.13, "label": "POP"},
-            {"x": 0.37, "y": 0.62, "w": 0.035, "h": 0.13, "label": "POP"},
+            {"x": 0.345, "y": 0.25, "w": 0.032, "h": 0.14, "label": "POP"},
+            {"x": 0.345, "y": 0.62, "w": 0.032, "h": 0.14, "label": "POP"},
         ],
     }
 
@@ -277,17 +288,17 @@ def _plano_arquitectonico_centro():
         "nombre_plano": "Planta Urbana • Formato Supermercado Express (980 m²)",
         "dimensiones_m": [32, 20],
         "bodega": {"x": 0.03, "y": 0.04, "w": 0.60, "h": 0.10, "label": "TRABAJADORES / ALMACÉN RÁPIDO"},
-        "puerta_entrada": {"x": 0.02, "y": 0.34, "w": 0.055, "h": 0.36, "nombre": "ACCESO PEATONAL"},
-        "linea_cajas": {"x": 0.86, "y": 0.48, "w": 0.105, "h": 0.44, "nombre": "CAJAS EXPRESS (3 POS)", "cajas": 3},
-        "zona_atencion": {"x": 0.86, "y": 0.18, "w": 0.105, "h": 0.22, "label": "PICKUP / DELIVERY"},
-        "columnas": [[0.40, 0.50], [0.69, 0.50]],
+        "puerta_entrada": {"x": 0.025, "y": 0.34, "w": 0.055, "h": 0.36, "nombre": "ACCESO PEATONAL"},
+        "linea_cajas": {"x": 0.835, "y": 0.46, "w": 0.125, "h": 0.46, "nombre": "CAJAS (3 POS)", "cajas": 3},
+        "zona_atencion": {"x": 0.835, "y": 0.18, "w": 0.125, "h": 0.24, "label": "PICKUP / DELIVERY"},
+        "columnas": [[0.38, 0.50], [0.68, 0.50]],
         "pasillos": [
-            {"label": "PASILLO 1 • SNACKS Y DESAYUNO", "x": 0.14, "y": 0.49},
-            {"label": "PASILLO 2 • BEBIDAS FRÍAS", "x": 0.46, "y": 0.49},
-            {"label": "ZONA CHECKOUT", "x": 0.72, "y": 0.87},
+            {"label": "PASILLO 1 • SNACKS Y DESAYUNO", "x": 0.12, "y": 0.50},
+            {"label": "PASILLO 2 • BEBIDAS FRÍAS", "x": 0.44, "y": 0.50},
+            {"label": "ZONA CHECKOUT", "x": 0.69, "y": 0.88},
         ],
         "cabeceras": [
-            {"x": 0.37, "y": 0.24, "w": 0.035, "h": 0.13, "label": "PROMO"},
+            {"x": 0.355, "y": 0.25, "w": 0.032, "h": 0.14, "label": "POP"},
         ],
     }
 
@@ -296,19 +307,19 @@ def _plano_arquitectonico_sur():
     return {
         "nombre_plano": "Nave Comercial • Formato Hiper Familiar (1,820 m²)",
         "dimensiones_m": [48, 26],
-        "bodega": {"x": 0.03, "y": 0.04, "w": 0.94, "h": 0.12, "label": "CENTRO DE CARGA Y BODEGA SUR"},
-        "puerta_entrada": {"x": 0.02, "y": 0.28, "w": 0.055, "h": 0.44, "nombre": "ACCESO PARQUEADERO"},
-        "linea_cajas": {"x": 0.86, "y": 0.46, "w": 0.105, "h": 0.46, "nombre": "CAJAS (5 POS)", "cajas": 5},
-        "zona_atencion": {"x": 0.86, "y": 0.19, "w": 0.105, "h": 0.21, "label": "SERVICIO CLIENTE"},
-        "columnas": [[0.38, 0.49], [0.67, 0.49], [0.38, 0.86], [0.67, 0.86]],
+        "bodega": {"x": 0.03, "y": 0.04, "w": 0.94, "h": 0.10, "label": "CENTRO DE CARGA Y BODEGA SUR"},
+        "puerta_entrada": {"x": 0.025, "y": 0.28, "w": 0.055, "h": 0.44, "nombre": "ACCESO PARQUEADERO"},
+        "linea_cajas": {"x": 0.835, "y": 0.44, "w": 0.125, "h": 0.48, "nombre": "CAJAS (5 POS)", "cajas": 5},
+        "zona_atencion": {"x": 0.835, "y": 0.18, "w": 0.125, "h": 0.22, "label": "SERVICIO CLIENTE"},
+        "columnas": [[0.365, 0.50], [0.645, 0.50], [0.365, 0.86], [0.645, 0.86]],
         "pasillos": [
-            {"label": "PASILLO 1 • CANASTA BÁSICA", "x": 0.14, "y": 0.49},
-            {"label": "PASILLO 2 • REFRIGERADOS Y BEBIDAS", "x": 0.46, "y": 0.49},
-            {"label": "PASILLO 3 • HOGAR MAYORISTA", "x": 0.72, "y": 0.87},
+            {"label": "PASILLO 1 • CANASTA BÁSICA", "x": 0.11, "y": 0.50},
+            {"label": "PASILLO 2 • REFRIGERADOS Y BEBIDAS", "x": 0.41, "y": 0.50},
+            {"label": "PASILLO 3 • HOGAR MAYORISTA", "x": 0.66, "y": 0.88},
         ],
         "cabeceras": [
-            {"x": 0.37, "y": 0.24, "w": 0.035, "h": 0.13, "label": "PACK"},
-            {"x": 0.66, "y": 0.24, "w": 0.035, "h": 0.13, "label": "POP"},
+            {"x": 0.345, "y": 0.25, "w": 0.032, "h": 0.14, "label": "PACK"},
+            {"x": 0.635, "y": 0.25, "w": 0.032, "h": 0.14, "label": "POP"},
         ],
     }
 
@@ -451,32 +462,32 @@ def init_analytics_sync():
         prod_cat_rows = [(p, cat_ids[c]) for c, prods in cats.items() if c in cat_ids for p in prods]
         _insertar_en_lotes(conn, "INSERT OR IGNORE INTO producto_categoria (producto, categoria_id)", prod_cat_rows, chunk_size=50)
 
-        # Semilla de Cámaras (con cobertura por sucursal)
+        # Semilla de Cámaras (con cobertura por sucursal, despejadas debajo de la bodega)
         camaras_default = [
-            ("CAM-01", "Cámara 12 (Techo 3.4m) • Pasillo Central y Puerta", "video", "static/demo_supermercado.mp4", "Activa",
-             0.18, 0.21, 72.0, 74.0, 0.42,
-             json.dumps({"x_min": 0.08, "x_max": 0.42, "y_min": 0.18, "y_max": 0.84, "altura_m": 3.4, "pitch_deg": 38}), "SUC-NORTE"),
-            ("CAM-02", "Cámara 14 (Techo 3.5m) • Góndolas Lácteos y Bebidas", "video", "static/demo_supermercado.mp4", "Activa",
-             0.52, 0.20, 90.0, 74.0, 0.42,
-             json.dumps({"x_min": 0.38, "x_max": 0.72, "y_min": 0.18, "y_max": 0.84, "altura_m": 3.5, "pitch_deg": 40}), "SUC-NORTE"),
-            ("CAM-03", "Cámara 16 (Techo 3.4m) • Hogar, Línea de Cajas y Salida", "video", "static/demo_supermercado.mp4", "Activa",
-             0.84, 0.48, 175.0, 72.0, 0.38,
-             json.dumps({"x_min": 0.62, "x_max": 0.92, "y_min": 0.20, "y_max": 0.88, "altura_m": 3.4, "pitch_deg": 36}), "SUC-NORTE"),
+            ("CAM-01", "Cámara 12 • Pasillo Central y Puerta", "video", "static/demo_supermercado.mp4", "Activa",
+             0.16, 0.21, 72.0, 74.0, 0.38,
+             json.dumps({"x_min": 0.08, "x_max": 0.40, "y_min": 0.20, "y_max": 0.84, "altura_m": 3.4, "pitch_deg": 38}), "SUC-NORTE"),
+            ("CAM-02", "Cámara 14 • Góndolas Lácteos y Bebidas", "video", "static/demo_supermercado.mp4", "Activa",
+             0.48, 0.21, 90.0, 74.0, 0.38,
+             json.dumps({"x_min": 0.38, "x_max": 0.68, "y_min": 0.20, "y_max": 0.84, "altura_m": 3.5, "pitch_deg": 40}), "SUC-NORTE"),
+            ("CAM-03", "Cámara 16 • Hogar, Cajas y Salida", "video", "static/demo_supermercado.mp4", "Activa",
+             0.80, 0.48, 178.0, 70.0, 0.34,
+             json.dumps({"x_min": 0.60, "x_max": 0.84, "y_min": 0.20, "y_max": 0.88, "altura_m": 3.4, "pitch_deg": 36}), "SUC-NORTE"),
             ("CAM-C1", "Cámara Express 01 • Acceso y Snacks", "video", "static/demo_supermercado.mp4", "Activa",
-             0.20, 0.22, 68.0, 74.0, 0.42,
-             json.dumps({"x_min": 0.08, "x_max": 0.45, "y_min": 0.18, "y_max": 0.84, "altura_m": 3.2, "pitch_deg": 36}), "SUC-CENTRO"),
+             0.18, 0.21, 68.0, 74.0, 0.38,
+             json.dumps({"x_min": 0.08, "x_max": 0.44, "y_min": 0.20, "y_max": 0.84, "altura_m": 3.2, "pitch_deg": 36}), "SUC-CENTRO"),
             ("CAM-C2", "Cámara Express 02 • Bebidas Frías y Cajas", "video", "static/demo_supermercado.mp4", "Activa",
-             0.62, 0.22, 110.0, 76.0, 0.44,
-             json.dumps({"x_min": 0.42, "x_max": 0.90, "y_min": 0.18, "y_max": 0.86, "altura_m": 3.2, "pitch_deg": 38}), "SUC-CENTRO"),
+             0.56, 0.21, 105.0, 74.0, 0.40,
+             json.dumps({"x_min": 0.40, "x_max": 0.84, "y_min": 0.20, "y_max": 0.86, "altura_m": 3.2, "pitch_deg": 38}), "SUC-CENTRO"),
             ("CAM-S1", "Cámara Sur 01 • Pasillo Canasta Básica", "video", "static/demo_supermercado.mp4", "Activa",
-             0.18, 0.22, 74.0, 74.0, 0.44,
-             json.dumps({"x_min": 0.08, "x_max": 0.42, "y_min": 0.18, "y_max": 0.84, "altura_m": 3.8, "pitch_deg": 40}), "SUC-SUR"),
+             0.16, 0.21, 74.0, 74.0, 0.38,
+             json.dumps({"x_min": 0.08, "x_max": 0.40, "y_min": 0.20, "y_max": 0.84, "altura_m": 3.8, "pitch_deg": 40}), "SUC-SUR"),
             ("CAM-S2", "Cámara Sur 02 • Refrigerados y Mayorista", "video", "static/demo_supermercado.mp4", "Activa",
-             0.54, 0.22, 92.0, 76.0, 0.44,
-             json.dumps({"x_min": 0.38, "x_max": 0.74, "y_min": 0.18, "y_max": 0.86, "altura_m": 3.8, "pitch_deg": 40}), "SUC-SUR"),
-            ("CAM-S3", "Cámara Sur 03 • Cajas y Salida Parqueadero", "video", "static/demo_supermercado.mp4", "Activa",
-             0.84, 0.50, 180.0, 72.0, 0.38,
-             json.dumps({"x_min": 0.64, "x_max": 0.92, "y_min": 0.20, "y_max": 0.88, "altura_m": 3.8, "pitch_deg": 36}), "SUC-SUR"),
+             0.48, 0.21, 92.0, 74.0, 0.38,
+             json.dumps({"x_min": 0.38, "x_max": 0.68, "y_min": 0.20, "y_max": 0.86, "altura_m": 3.8, "pitch_deg": 40}), "SUC-SUR"),
+            ("CAM-S3", "Cámara Sur 03 • Cajas y Parqueadero", "video", "static/demo_supermercado.mp4", "Activa",
+             0.80, 0.48, 180.0, 70.0, 0.34,
+             json.dumps({"x_min": 0.62, "x_max": 0.84, "y_min": 0.20, "y_max": 0.88, "altura_m": 3.8, "pitch_deg": 36}), "SUC-SUR"),
         ]
         _insertar_en_lotes(
             conn,
@@ -485,10 +496,10 @@ def init_analytics_sync():
             chunk_size=20,
         )
 
-        # Semilla de Perchas mapeadas con polígonos de perspectiva reales
+        # Semilla de Perchas mapeadas con polígonos de perspectiva reales y sin choques con cajas
         perchas_default = [
             ("PER-A1", "Percha A1 (Izq.) • Cereales y Desayuno", "Cereales", "CAM-01",
-             0.12, 0.23, 0.23, 0.14,
+             0.11, 0.25, 0.22, 0.15,
              json.dumps({"x1": 0.0, "y1": 0.285, "x2": 0.432, "y2": 1.0, "poly": POLY_PER_A1}),
              json.dumps([
                  {"nivel": "Superior (Subir Cabeza)", "y1": 0.28, "y2": 0.46, "producto": "Avena Crujiente 400g"},
@@ -496,7 +507,7 @@ def init_analytics_sync():
                  {"nivel": "Inferior (Agacharse)", "y1": 0.70, "y2": 0.96, "producto": "Barras de Cereal Mix"}
              ]), "#FE5000", "SUC-NORTE"),
             ("PER-A2", "Percha A2 (Der.) • Salsas, Pastas y Conservas", "Conservas", "CAM-01",
-             0.12, 0.61, 0.23, 0.14,
+             0.11, 0.62, 0.22, 0.15,
              json.dumps({"x1": 0.655, "y1": 0.29, "x2": 1.0, "y2": 1.0, "poly": POLY_PER_A2}),
              json.dumps([
                  {"nivel": "Superior (Subir Cabeza)", "y1": 0.29, "y2": 0.48, "producto": "Pasta Italiana 500g"},
@@ -504,7 +515,7 @@ def init_analytics_sync():
                  {"nivel": "Inferior (Agacharse)", "y1": 0.72, "y2": 0.96, "producto": "Aceitunas y Encurtidos"}
              ]), "#F59E0B", "SUC-NORTE"),
             ("PER-B1", "Percha B1 • Bebidas Frías y Energizantes", "Bebidas", "CAM-02",
-             0.43, 0.23, 0.21, 0.14,
+             0.41, 0.25, 0.21, 0.15,
              json.dumps({"x1": 0.0, "y1": 0.285, "x2": 0.432, "y2": 1.0, "poly": POLY_PER_A1}),
              json.dumps([
                  {"nivel": "Superior (Subir Cabeza)", "y1": 0.28, "y2": 0.48, "producto": "Coca Cola Zero 500ml"},
@@ -512,14 +523,14 @@ def init_analytics_sync():
                  {"nivel": "Inferior (Agacharse)", "y1": 0.72, "y2": 0.96, "producto": "Jugo Naranja 1L"}
              ]), "#2563EB", "SUC-NORTE"),
             ("PER-B2", "Percha B2 • Lácteos y Refrigerados", "Lácteos", "CAM-02",
-             0.43, 0.61, 0.21, 0.14,
+             0.41, 0.62, 0.21, 0.15,
              json.dumps({"x1": 0.655, "y1": 0.29, "x2": 1.0, "y2": 1.0, "poly": POLY_PER_A2}),
              json.dumps([
                  {"nivel": "Superior (Subir Cabeza)", "y1": 0.29, "y2": 0.56, "producto": "Leche Entera Tetra 1L"},
                  {"nivel": "Medio (Altura Ojos)", "y1": 0.56, "y2": 0.90, "producto": "Yogurt Griego Natural"}
              ]), "#10B981", "SUC-NORTE"),
             ("PER-C1", "Percha C1 • Snacks, Hogar y Cajas", "Snacks", "CAM-03",
-             0.70, 0.25, 0.12, 0.48,
+             0.67, 0.26, 0.115, 0.48,
              json.dumps({"x1": 0.0, "y1": 0.285, "x2": 0.432, "y2": 1.0, "poly": POLY_PER_A1}),
              json.dumps([
                  {"nivel": "Superior (Subir Cabeza)", "y1": 0.28, "y2": 0.54, "producto": "Papas Artesanales 150g"},
@@ -647,9 +658,39 @@ def init_analytics_sync():
         necesita_semilla = (not sem_row or sem_row[0] != _SEED_VERSION) or cnt_reciente < 18
         limpiar_prev = not sem_row or sem_row[0] != _SEED_VERSION
 
+        # Si se actualiza versión en una base existente (ej. Turso), sincronizar coordenadas del plano 2D
+        if limpiar_prev:
+            for s_id, plano_fn in (
+                ("SUC-NORTE", _plano_arquitectonico_norte),
+                ("SUC-CENTRO", _plano_arquitectonico_centro),
+                ("SUC-SUR", _plano_arquitectonico_sur),
+            ):
+                conn.execute("UPDATE sucursales SET plano_json = ? WHERE id = ?", (json.dumps(plano_fn()), s_id))
+            for cid, cnom, cx, cy, cang, cfov, calc in (
+                ("CAM-01", "Cámara 12 • Pasillo Central y Puerta", 0.16, 0.21, 72.0, 74.0, 0.38),
+                ("CAM-02", "Cámara 14 • Góndolas Lácteos y Bebidas", 0.48, 0.21, 90.0, 74.0, 0.38),
+                ("CAM-03", "Cámara 16 • Hogar, Cajas y Salida", 0.80, 0.48, 178.0, 70.0, 0.34),
+            ):
+                conn.execute(
+                    "UPDATE camaras_mapa SET nombre = ?, pos_x = ?, pos_y = ?, angulo = ?, fov = ?, alcance = ? WHERE id = ?",
+                    (cnom, cx, cy, cang, cfov, calc, cid),
+                )
+            for pid, mx, my, mw, mh in (
+                ("PER-A1", 0.11, 0.25, 0.22, 0.15),
+                ("PER-A2", 0.11, 0.62, 0.22, 0.15),
+                ("PER-B1", 0.41, 0.25, 0.21, 0.15),
+                ("PER-B2", 0.41, 0.62, 0.21, 0.15),
+                ("PER-C1", 0.67, 0.26, 0.115, 0.48),
+            ):
+                conn.execute(
+                    "UPDATE perchas_mapa SET map_x = ?, map_y = ?, map_w = ?, map_h = ? WHERE id = ?",
+                    (mx, my, mw, mh, pid),
+                )
+
         conn.commit()
     finally:
         _cerrar_si_local(conn)
+    invalidar_cache_metadatos()
 
     if necesita_semilla:
         if TURSO_URL:
@@ -690,9 +731,9 @@ def _sembrar_historico_muestra(conn, limpiar_previos: bool = False):
     ahora = datetime.now(timezone.utc)
 
     if limpiar_previos:
-        # Solo elimina sesiones sintéticas anteriores sin tocar registros reales del usuario
-        conn.execute("DELETE FROM telemetria_coordenadas WHERE sesion_anonima LIKE 'VEC-%' OR sesion_anonima LIKE 'STAFF-%'")
-        conn.execute("DELETE FROM eventos WHERE detalle LIKE '%(VEC-%' OR (tipo IN ('trafico', 'permanencia') AND detalle IS NULL)")
+        # Limpia eventos y coordenadas heredadas/sintéticas para garantizar coherencia 1-a-1 (tomados <= trafico y devueltos exactos)
+        conn.execute("DELETE FROM telemetria_coordenadas")
+        conn.execute("DELETE FROM eventos")
 
     perchas_por_suc = {
         "SUC-NORTE": [
@@ -831,6 +872,7 @@ def regenerar_simulacion_muestra():
         conn.commit()
     finally:
         _cerrar_si_local(conn)
+    invalidar_cache_metadatos()
 
 
 def _construir_filtro_fecha(
@@ -1399,6 +1441,8 @@ def obtener_resumen_ejecutivo_publicidad(
     clientes_validados = int(fila_priv[1] or 0)
 
     perchas_ordenadas = sorted(perchas, key=lambda p: p["tomas"], reverse=True)
+    calientes_filtradas = [p for p in perchas_ordenadas if p.get("temperatura") == "caliente"] or perchas_ordenadas[:2]
+    ids_calientes = {p["id"] for p in calientes_filtradas[:3]}
     zonas_calientes = [
         {
             "id": p["id"],
@@ -1408,7 +1452,11 @@ def obtener_resumen_ejecutivo_publicidad(
             "sucursal_id": p.get("sucursal_id", "SUC-NORTE"),
             "promocion": p["promociones"][0]["titulo"] if p.get("promociones") else "Tráfico Orgánico"
         }
-        for p in perchas_ordenadas[:3]
+        for p in calientes_filtradas[:3]
+    ]
+    candidatas_frias = [
+        p for p in reversed(perchas_ordenadas)
+        if p["id"] not in ids_calientes and p.get("temperatura") != "caliente"
     ]
     zonas_frias = [
         {
@@ -1419,8 +1467,8 @@ def obtener_resumen_ejecutivo_publicidad(
             "sucursal_id": p.get("sucursal_id", "SUC-NORTE"),
             "promocion": p["promociones"][0]["titulo"] if p.get("promociones") else "Sin Pauta POP"
         }
-        for p in reversed(perchas_ordenadas)
-    ][:2]
+        for p in candidatas_frias[:2]
+    ]
 
     mas_llevados = sorted(inventario, key=lambda x: x["llevados_netos"], reverse=True)[:5]
     mayor_indecision = sorted(inventario, key=lambda x: x["devueltos"], reverse=True)[:4]
@@ -1590,7 +1638,8 @@ def obtener_top_productos(limite=10, dias=30, fecha_inicio: str = None, fecha_fi
     where_ev, params_ev = _construir_filtro_fecha(
         dias, fecha_inicio, fecha_fin, "creado", horas=horas, hora_inicio=hora_inicio, hora_fin=hora_fin, sucursal_id=sucursal_id
     )
-    expr_prod = "TRIM(CASE WHEN instr(detalle, ' (') > 0 THEN substr(detalle, 1, instr(detalle, ' (') - 1) ELSE detalle END)"
+    expr_sin_par = "TRIM(CASE WHEN instr(detalle, ' (') > 0 THEN substr(detalle, 1, instr(detalle, ' (') - 1) ELSE detalle END)"
+    expr_prod = f"TRIM(CASE WHEN instr({expr_sin_par}, ' [') > 0 THEN substr({expr_sin_par}, 1, instr({expr_sin_par}, ' [') - 1) ELSE {expr_sin_par} END)"
     return leer(f"""
         SELECT {expr_prod} as producto, COUNT(*) as interacciones
         FROM eventos WHERE tipo IN ('producto_tomado', 'interaccion') AND {where_ev}
@@ -1697,6 +1746,575 @@ def obtener_tendencia_diaria(dias=14, fecha_inicio: str = None, fecha_fin: str =
         FROM eventos WHERE {where_ev}
         GROUP BY fecha ORDER BY fecha
     """, params_ev)
+
+
+def _obtener_metadatos_cacheados():
+    """Lee tablas de configuración (sucursales, cámaras, perchas, catálogo, promos) con caché breve en RAM."""
+    ahora = time.time()
+    if TURSO_URL:
+        with _meta_cache_lock:
+            cached = _meta_cache.get("all")
+            if cached and (ahora - cached["t"]) < _META_CACHE_TTL:
+                return cached["d"]
+
+    sucursales = obtener_sucursales()
+    camaras = obtener_camaras_mapa()
+    promos = obtener_promociones_percha()
+    perchas_raw = leer("""
+        SELECT id, nombre, categoria, camara_id, map_x, map_y, map_w, map_h, roi_json, niveles_json, color, sucursal_id
+        FROM perchas_mapa ORDER BY id
+    """)
+    catalogo_raw = leer("""
+        SELECT c.sku, c.nombre, c.categoria, c.percha_id, COALESCE(p.nombre, c.percha_id),
+               c.nivel, c.stock, c.tomas_base, c.devoluciones_base, c.sucursal_id
+        FROM productos_catalogo c
+        LEFT JOIN perchas_mapa p ON c.percha_id = p.id
+        ORDER BY c.id
+    """)
+    d = {
+        "sucursales": sucursales,
+        "camaras": camaras,
+        "promos": promos,
+        "perchas_raw": perchas_raw,
+        "catalogo_raw": catalogo_raw,
+    }
+    if TURSO_URL:
+        with _meta_cache_lock:
+            _meta_cache["all"] = {"t": ahora, "d": d}
+    return d
+
+
+def _normalizar_nombre_producto(detalle: str) -> str:
+    txt = str(detalle or "").strip()
+    if " (" in txt:
+        txt = txt.split(" (", 1)[0].strip()
+    if " [" in txt:
+        txt = txt.split(" [", 1)[0].strip()
+    return txt
+
+
+def obtener_bundle_dashboard(
+    dias: int = 30,
+    fecha_inicio: str = None,
+    fecha_fin: str = None,
+    horas: int = None,
+    hora_inicio: int = None,
+    hora_fin: int = None,
+    sucursal_id: str = None,
+):
+    """
+    Calcula KPIs (/api/stats), Resumen Ejecutivo de Publicidad y Estado Espacial del Mapa 2D
+    en solo 3 consultas SQL + metadatos en RAM (reduce >22 round-trips en Turso a 3).
+    """
+    meta = _obtener_metadatos_cacheados()
+    suc_clean = (sucursal_id or "").strip()
+    es_todas = not suc_clean or suc_clean.lower() == "todas"
+    suc_mapa = "SUC-NORTE" if es_todas else suc_clean
+
+    where_ev, params_ev = _construir_filtro_fecha(
+        dias, fecha_inicio, fecha_fin, "creado",
+        horas=horas, hora_inicio=hora_inicio, hora_fin=hora_fin, sucursal_id=sucursal_id,
+    )
+
+    # Query 1: Resumen agregado de eventos
+    fila_st = leer(
+        f"""
+        SELECT
+            COALESCE(SUM(CASE WHEN tipo = 'trafico' THEN 1 ELSE 0 END), 0),
+            COALESCE(SUM(CASE WHEN tipo = 'permanencia' THEN 1 ELSE 0 END), 0),
+            COALESCE(AVG(CASE WHEN tipo = 'permanencia' THEN valor END), 0),
+            COALESCE(SUM(CASE WHEN tipo IN ('producto_tomado', 'interaccion') THEN 1 ELSE 0 END), 0),
+            COALESCE(SUM(CASE WHEN tipo = 'producto_tomado' THEN 1 ELSE 0 END), 0),
+            COALESCE(SUM(CASE WHEN tipo = 'producto_devuelto' THEN 1 ELSE 0 END), 0),
+            COALESCE(SUM(CASE WHEN tipo = 'handoff_camara' THEN 1 ELSE 0 END), 0)
+        FROM eventos WHERE {where_ev}
+        """,
+        params_ev,
+        uno=True,
+    ) or (0, 0, 0, 0, 0, 0, 0)
+
+    # Query 2: Tomas y devoluciones agrupadas por detalle (para perchas, inventario y top productos)
+    ev_prod_rows = leer(
+        f"""
+        SELECT tipo, detalle, COUNT(*)
+        FROM eventos
+        WHERE tipo IN ('producto_tomado', 'producto_devuelto', 'interaccion') AND {where_ev}
+        GROUP BY tipo, detalle
+        """,
+        params_ev,
+    )
+
+    # Query 3: Telemetría de coordenadas en 1 solo escaneo (comportamiento, postura, privacidad, perchas y heatmap 24x12)
+    tc_rows = leer(
+        f"""
+        SELECT sesion_anonima, es_cliente_valido, x_norm, y_norm, percha_id, postura_cabeza, comportamiento, dwell_sec
+        FROM telemetria_coordenadas
+        WHERE {where_ev}
+        """,
+        params_ev,
+    )
+
+    tomas_det = {}
+    dev_det = {}
+    top_prod_acc = {}
+    for tipo, det, cnt in ev_prod_rows:
+        c_int = int(cnt or 0)
+        if tipo in ("producto_tomado", "interaccion"):
+            tomas_det[det] = tomas_det.get(det, 0) + c_int
+            nom_clean = _normalizar_nombre_producto(det)
+            if nom_clean:
+                top_prod_acc[nom_clean] = top_prod_acc.get(nom_clean, 0) + c_int
+        elif tipo == "producto_devuelto":
+            dev_det[det] = dev_det.get(det, 0) + c_int
+
+    top_productos = [
+        {"producto": k, "veces": v}
+        for k, v in sorted(top_prod_acc.items(), key=lambda kv: kv[1], reverse=True)[:5]
+    ]
+
+    stats = {
+        "sucursal_id": sucursal_id or "todas",
+        "trafico": int(fila_st[0] or 0),
+        "permanencia_eventos": int(fila_st[1] or 0),
+        "permanencia_promedio_seg": round(float(fila_st[2] or 0.0), 1),
+        "interacciones": int(fila_st[3] or 0),
+        "tomados": int(fila_st[4] or 0),
+        "devueltos": int(fila_st[5] or 0),
+        "handoffs": int(fila_st[6] or 0),
+        "top_productos": top_productos,
+    }
+
+    # Procesar telemetría en una sola pasada en memoria
+    cols, rows = 24, 12
+    grid = [[0.0 for _ in range(cols)] for _ in range(rows)]
+    comp_acc = {
+        "mira_y_compra": [0, 0.0],
+        "no_mira_y_compra": [0, 0.0],
+        "solo_mira": [0, 0.0],
+        "ultimo_momento_devuelve": [0, 0.0],
+    }
+    postura_map = {"giro_percha": 0, "sube_cabeza": 0, "se_agacha": 0, "frente_pasillo": 0}
+    stats_percha = {}
+    dwell_percha = {}
+    empleados_excluidos = 0
+    sesiones_validas = set()
+    muestras_termicas = 0
+
+    for ses, valido, x_n, y_n, pid_c, post, comp, dwell in tc_rows:
+        if int(valido or 0) == 0:
+            empleados_excluidos += 1
+            continue
+        muestras_termicas += 1
+        if ses:
+            sesiones_validas.add(ses)
+        d_val = float(dwell or 0.0)
+
+        if comp in comp_acc:
+            comp_acc[comp][0] += 1
+            comp_acc[comp][1] += d_val
+
+        if post in ("giro_percha_izq", "giro_percha_der", "giro_percha"):
+            postura_map["giro_percha"] += 1
+        elif post == "sube_cabeza":
+            postura_map["sube_cabeza"] += 1
+        elif post == "se_agacha":
+            postura_map["se_agacha"] += 1
+        else:
+            postura_map["frente_pasillo"] += 1
+
+        if pid_c:
+            sp = stats_percha.setdefault(pid_c, {
+                "mira_y_compra": 0, "no_mira_y_compra": 0, "solo_mira": 0,
+                "ultimo_momento_devuelve": 0, "dwell_prom": 0.0
+            })
+            if comp in sp:
+                sp[comp] += 1
+            acc = dwell_percha.setdefault(pid_c, [0.0, 0])
+            acc[0] += d_val
+            acc[1] += 1
+
+        x = max(0.0, min(0.999, float(x_n or 0.0)))
+        y = max(0.0, min(0.999, float(y_n or 0.0)))
+        peso = 1.0 + min(4.0, d_val / 2.0)
+        if comp in ("mira_y_compra", "no_mira_y_compra"):
+            peso *= 1.35
+        elif comp == "ultimo_momento_devuelve":
+            peso *= 1.15
+        c_idx = int(x * cols)
+        r_idx = int(y * rows)
+        grid[r_idx][c_idx] += peso
+        for dr in (-1, 0, 1):
+            for dc in (-1, 0, 1):
+                if dr == 0 and dc == 0:
+                    continue
+                rr, cc = r_idx + dr, c_idx + dc
+                if 0 <= rr < rows and 0 <= cc < cols:
+                    grid[rr][cc] += peso * (0.45 if (dr == 0 or dc == 0) else 0.22)
+
+    for pid_c, (tot_d, tot_n) in dwell_percha.items():
+        if tot_n > 0:
+            stats_percha[pid_c]["dwell_prom"] = round(tot_d / tot_n, 1)
+
+    comp_map = {
+        k: {"casos": v[0], "dwell": round(v[1] / v[0], 1) if v[0] > 0 else 0.0}
+        for k, v in comp_acc.items()
+    }
+
+    promos_filtradas = [pr for pr in meta["promos"] if es_todas or pr.get("sucursal_id") == suc_clean]
+    promos_por_percha = {}
+    for pr in promos_filtradas:
+        if pr["activa"]:
+            promos_por_percha.setdefault(pr["percha_id"], []).append(pr)
+
+    def _construir_perchas(raw_rows):
+        bruto = []
+        for f in raw_rows:
+            pid, pnombre = f[0], f[1]
+            try:
+                roi = json.loads(f[8] or "{}")
+            except Exception:
+                roi = {"x1": 0.15, "y1": 0.15, "x2": 0.85, "y2": 0.85}
+            try:
+                niveles = json.loads(f[9] or "[]")
+            except Exception:
+                niveles = []
+            tomas_ev = sum(cnt for det, cnt in tomas_det.items() if det and (pid in det or pnombre in det))
+            dev_ev = sum(cnt for det, cnt in dev_det.items() if det and (pid in det or pnombre in det))
+            st = stats_percha.get(pid, {
+                "mira_y_compra": 0, "no_mira_y_compra": 0, "solo_mira": 0,
+                "ultimo_momento_devuelve": 0, "dwell_prom": 0.0
+            })
+            tomas_coords = st["mira_y_compra"] + st["no_mira_y_compra"] + st["ultimo_momento_devuelve"]
+            total_tomas = max(tomas_ev, tomas_coords)
+            total_dev = max(dev_ev, st["ultimo_momento_devuelve"])
+            bruto.append((f, roi, niveles, st, total_tomas, total_dev, total_tomas + st["solo_mira"]))
+
+        max_tomas = max((it[4] for it in bruto), default=1)
+        out = []
+        for f, roi, niveles, st, total_tomas, total_dev, inter_tot in bruto:
+            ratio = (total_tomas / max(1, max_tomas)) if max_tomas > 0 else 0.0
+            temp = "caliente" if (total_tomas > 0 and ratio >= 0.65) else ("templada" if (total_tomas > 0 and ratio >= 0.35) else "fria")
+            out.append({
+                "id": f[0], "nombre": f[1], "categoria": f[2], "camara_id": f[3],
+                "map_x": float(f[4]), "map_y": float(f[5]), "map_w": float(f[6]), "map_h": float(f[7]),
+                "roi": roi, "niveles": niveles, "color": f[10] or "#FE5000", "sucursal_id": f[11] or "SUC-NORTE",
+                "tomas": total_tomas, "devoluciones": total_dev, "interacciones": inter_tot,
+                "temperatura": temp, "intensidad_calor": round(ratio, 2),
+                "comportamiento": st, "promociones": promos_por_percha.get(f[0], []),
+            })
+        return out
+
+    perchas_todas_filtro = _construir_perchas([f for f in meta["perchas_raw"] if es_todas or (f[11] or "SUC-NORTE") == suc_clean])
+    perchas_mapa_suc = (
+        perchas_todas_filtro if not es_todas
+        else _construir_perchas([f for f in meta["perchas_raw"] if (f[11] or "SUC-NORTE") == suc_mapa])
+    )
+
+    # Inventario consolidado sin round-trips extra
+    promo_por_prod = {(pr["producto"].lower(), pr["percha_id"]): pr for pr in promos_filtradas if pr["activa"]}
+    promo_por_percha = {pr["percha_id"]: pr for pr in promos_filtradas if pr["activa"]}
+    traf_base = max(1, stats["trafico"])
+    inventario = []
+    for sku, nombre, cat, pid, pnombre, nivel, stock, _tb, _db, suc_row in meta["catalogo_raw"]:
+        if not es_todas and (suc_row or "SUC-NORTE") != suc_clean:
+            continue
+        t_prod = int(sum(
+            cnt for det, cnt in tomas_det.items()
+            if det and (pid in det or (nombre.lower() in det.lower() and "[" not in det)) and nombre.lower() in det.lower()
+        ))
+        d_prod = int(sum(
+            cnt for det, cnt in dev_det.items()
+            if det and (pid in det or (nombre.lower() in det.lower() and "[" not in det)) and nombre.lower() in det.lower()
+        ))
+        netos = max(0, t_prod - d_prod)
+        stock_act = max(0, int(stock) - min(int(stock), netos // 2))
+        evac = round(min(100.0, (netos / traf_base) * 100.0), 1)
+        pr = promo_por_prod.get((nombre.lower(), pid)) or promo_por_percha.get(pid)
+        if d_prod >= 2 and (d_prod / max(1, t_prod)) >= 0.22:
+            est = "Indecisión / Cambio Último Momento"
+        elif stock_act <= 5:
+            est = "Crítico (Reponer)"
+        elif evac >= 12.0:
+            est = "Zona Caliente (Alta Rotación)"
+        elif evac < 4.0:
+            est = "Zona Fría (Lento)"
+        else:
+            est = "Óptimo"
+        inventario.append({
+            "sku": sku, "nombre": nombre, "categoria": cat, "percha_id": pid, "percha_nombre": pnombre,
+            "nivel": nivel, "sucursal_id": suc_row or "SUC-NORTE", "stock": stock_act,
+            "tomas": t_prod, "devueltos": d_prod, "llevados_netos": netos, "tasa_evacuacion": evac,
+            "promocion_activa": pr["titulo"] if pr else "Sin promo activa",
+            "tipo_publicidad": pr["tipo_publicidad"] if pr else "Orgánico",
+            "estado": est,
+        })
+
+    perchas_ord = sorted(perchas_todas_filtro, key=lambda p: p["tomas"], reverse=True)
+    calientes_f = [p for p in perchas_ord if p.get("temperatura") == "caliente"] or perchas_ord[:2]
+    ids_cal = {p["id"] for p in calientes_f[:3]}
+    zonas_calientes = [
+        {"id": p["id"], "nombre": p["nombre"], "tomas": p["tomas"], "devoluciones": p["devoluciones"],
+         "sucursal_id": p.get("sucursal_id", "SUC-NORTE"),
+         "promocion": p["promociones"][0]["titulo"] if p.get("promociones") else "Tráfico Orgánico"}
+        for p in calientes_f[:3]
+    ]
+    candidatas_fr = [p for p in reversed(perchas_ord) if p["id"] not in ids_cal and p.get("temperatura") != "caliente"]
+    zonas_frias = [
+        {"id": p["id"], "nombre": p["nombre"], "tomas": p["tomas"], "devoluciones": p["devoluciones"],
+         "sucursal_id": p.get("sucursal_id", "SUC-NORTE"),
+         "promocion": p["promociones"][0]["titulo"] if p.get("promociones") else "Sin Pauta POP"}
+        for p in candidatas_fr[:2]
+    ]
+
+    evaluacion_promos = []
+    for pr in promos_filtradas:
+        pm = next(
+            (it for it in inventario if it["percha_id"] == pr["percha_id"] and it["nombre"].lower() == pr["producto"].lower()),
+            next((it for it in inventario if it["nombre"].lower() == pr["producto"].lower()), None),
+        )
+        tp = pm["tomas"] if pm else 0
+        dp = pm["devueltos"] if pm else 0
+        np_ = max(0, tp - dp)
+        ret = round((np_ / max(1, tp)) * 100.0, 1) if tp > 0 else 0.0
+        rdev = (dp / tp) if tp > 0 else 0.0
+        niv_p = (pm["nivel"] if pm else "").lower()
+        if dp >= 2 and rdev >= 0.22:
+            diag_txt = "Capta la atención inicial, pero presenta devoluciones de último momento por precio o comparación con el competidor."
+            est_ef = "Fricción de Precio / Sustitución"
+        elif "inferior" in niv_p or tp < 3:
+            diag_txt = "Baja visibilidad en el rango consultado (zona fría o nivel inferior). Conviene reubicar a altura de los ojos o reforzar stopper."
+            est_ef = "Baja Visibilidad (Zona Fría)"
+        else:
+            diag_txt = "Atracción visual consistente y cierre efectivo en percha dentro del período analizado."
+            est_ef = "Alta Conversión POP"
+        evaluacion_promos.append({
+            "id": pr["id"], "percha_id": pr["percha_id"], "percha_nombre": pr["percha_nombre"],
+            "sucursal_id": pr.get("sucursal_id", "SUC-NORTE"), "producto": pr["producto"],
+            "titulo": pr["titulo"], "tipo_publicidad": pr["tipo_publicidad"], "descuento_pct": pr["descuento_pct"],
+            "tomas": tp, "devueltos": dp, "llevados_netos": np_, "efectividad_pct": ret,
+            "estado_efecto": est_ef, "diagnostico": diag_txt,
+        })
+
+    resumen_pub = {
+        "sucursal_id": sucursal_id or "todas",
+        "privacidad": {
+            "modo": "Anonimización Coordenadas 2D Activa (Cero Biometría / GDPR y LOPDP)",
+            "clientes_validados_puerta_caja": len(sesiones_validas),
+            "empleados_excluidos": empleados_excluidos,
+        },
+        "comportamiento_visual": comp_map,
+        "postura_cabeza": postura_map,
+        "zonas_calientes": zonas_calientes,
+        "zonas_frias": zonas_frias,
+        "productos_mas_llevados": sorted(inventario, key=lambda x: x["llevados_netos"], reverse=True)[:5],
+        "productos_cambio_ultimo_momento": sorted(inventario, key=lambda x: x["devueltos"], reverse=True)[:4],
+        "evaluacion_promociones": evaluacion_promos,
+    }
+
+    suc_obj = next((s for s in meta["sucursales"] if s["id"] == suc_mapa), meta["sucursales"][0] if meta["sucursales"] else None)
+    plano_arq = (suc_obj or {}).get("plano") or _plano_arquitectonico_norte()
+    camaras_suc = [c for c in meta["camaras"] if (c.get("sucursal_id") or "SUC-NORTE") == suc_mapa]
+    grid_round = [[round(v, 2) for v in fila] for fila in grid]
+    max_int = max((max(fila) for fila in grid_round), default=0.0)
+
+    return {
+        "stats": stats,
+        "resumen_publicidad": resumen_pub,
+        "inventario": inventario,
+        "mapa_base": {
+            "sucursal_id": suc_obj["id"] if suc_obj else "SUC-NORTE",
+            "sucursal_nombre": suc_obj["nombre"] if suc_obj else "Matriz Norte",
+            "plano_arquitectura": plano_arq,
+            "zonas_arquitectura": {
+                "puerta_entrada": plano_arq.get("puerta_entrada"),
+                "linea_cajas": plano_arq.get("linea_cajas"),
+            },
+            "heatmap_grid": grid_round,
+            "heatmap_meta": {
+                "cols": cols, "rows": rows,
+                "max_intensidad": round(max_int, 2),
+                "total_muestras": muestras_termicas,
+            },
+            "camaras": camaras_suc,
+            "perchas": perchas_mapa_suc,
+        },
+    }
+
+
+def obtener_bundle_analitica(
+    agrupacion: str = "semana",
+    dias: int = 30,
+    fecha_inicio: str = None,
+    fecha_fin: str = None,
+    horas: int = None,
+    hora_inicio: int = None,
+    hora_fin: int = None,
+    sucursal_id: str = None,
+):
+    """Calcula toda la pestaña 2 (serie temporal, curva horaria, matriz, franjas, perfiles y top productos) en 1 escaneo SQL."""
+    where_ev, params_ev = _construir_filtro_fecha(
+        dias, fecha_inicio, fecha_fin, "creado",
+        horas=horas, hora_inicio=hora_inicio, hora_fin=hora_fin, sucursal_id=sucursal_id,
+    )
+    if agrupacion == "hora":
+        expr_periodo = "strftime('%Y-%m-%d %H:00', creado)"
+    elif agrupacion == "semana":
+        expr_periodo = "strftime('%Y-S%W', creado)"
+    elif agrupacion == "mes":
+        expr_periodo = "strftime('%Y-%m', creado)"
+    else:
+        expr_periodo = "date(creado)"
+
+    rows = leer(
+        f"""
+        SELECT tipo, detalle, valor, {expr_periodo}, strftime('%w', creado), strftime('%H', creado)
+        FROM eventos
+        WHERE {where_ev}
+        ORDER BY creado ASC
+        """,
+        params_ev,
+    )
+
+    serie_acc = {}
+    horas_map = {str(i).zfill(2): 0 for i in range(24)}
+    matriz = [[0] * 24 for _ in range(7)]
+    franjas = {
+        "manana": {"trafico": 0, "interacciones": 0, "perm_sum": 0.0, "perm_cnt": 0},
+        "tarde": {"trafico": 0, "interacciones": 0, "perm_sum": 0.0, "perm_cnt": 0},
+        "noche": {"trafico": 0, "interacciones": 0, "perm_sum": 0.0, "perm_cnt": 0},
+    }
+    perfiles_acc = {}
+    top_acc = {}
+
+    for tipo, det, val, per, dow_s, hr_s in rows:
+        h_int = int(hr_s) if hr_s is not None else 0
+        d_int = int(dow_s) if dow_s is not None else 0
+        fr_key = "manana" if 6 <= h_int <= 11 else ("tarde" if 12 <= h_int <= 17 else "noche")
+
+        if per:
+            sb = serie_acc.setdefault(per, {"t": 0, "tom": 0, "dev": 0, "ps": 0.0, "pc": 0})
+        else:
+            sb = None
+
+        if tipo == "trafico":
+            if sb:
+                sb["t"] += 1
+            horas_map[f"{h_int:02d}"] = horas_map.get(f"{h_int:02d}", 0) + 1
+            if 0 <= d_int < 7 and 0 <= h_int < 24:
+                matriz[d_int][h_int] += 1
+            franjas[fr_key]["trafico"] += 1
+        elif tipo in ("producto_tomado", "interaccion"):
+            if sb and tipo == "producto_tomado":
+                sb["tom"] += 1
+            franjas[fr_key]["interacciones"] += 1
+            nom = _normalizar_nombre_producto(det)
+            if nom:
+                top_acc[nom] = top_acc.get(nom, 0) + 1
+        elif tipo == "producto_devuelto":
+            if sb:
+                sb["dev"] += 1
+        elif tipo == "permanencia" and val is not None:
+            fv = float(val)
+            if sb:
+                sb["ps"] += fv
+                sb["pc"] += 1
+            franjas[fr_key]["perm_sum"] += fv
+            franjas[fr_key]["perm_cnt"] += 1
+            if fv < 2.5:
+                pf_k = "Express (<2.5s)"
+            elif fv < 3.8:
+                pf_k = "Explorador (2.5-3.8s)"
+            elif fv < 4.5:
+                pf_k = "Interesado (3.8-4.5s)"
+            else:
+                pf_k = "Decisor (4.5s+)"
+            pa = perfiles_acc.setdefault(pf_k, [0, 0.0])
+            pa[0] += 1
+            pa[1] += fv
+
+    # Formatear serie temporal
+    periodos_ord = sorted(serie_acc.keys())
+    recortar_hora = agrupacion == "hora" and ((horas is not None and horas <= 24) or (dias == 1 and not fecha_inicio))
+    serie = {
+        "agrupacion": agrupacion,
+        "labels": [p[11:16] if recortar_hora else p for p in periodos_ord],
+        "trafico": [serie_acc[p]["t"] for p in periodos_ord],
+        "tomados": [serie_acc[p]["tom"] for p in periodos_ord],
+        "interacciones": [serie_acc[p]["tom"] for p in periodos_ord],
+        "llevados": [serie_acc[p]["tom"] for p in periodos_ord],
+        "devueltos": [serie_acc[p]["dev"] for p in periodos_ord],
+        "permanencia": [round(serie_acc[p]["ps"] / serie_acc[p]["pc"], 1) if serie_acc[p]["pc"] else 0.0 for p in periodos_ord],
+    }
+
+    # Formatear matriz semanal
+    nombres_dias = ["Dom", "Lun", "Mar", "Mié", "Jue", "Vie", "Sáb"]
+    total_semanal = 0
+    max_hv, max_hd, max_ht = -1, "", ""
+    resumen_franjas = []
+    totales_dia = []
+    for d in range(7):
+        for h in range(24):
+            v = matriz[d][h]
+            total_semanal += v
+            if v > max_hv:
+                max_hv, max_hd, max_ht = v, nombres_dias[d], f"{h:02d}:00"
+        m_v = sum(matriz[d][h] for h in range(6, 11))
+        md_v = sum(matriz[d][h] for h in range(11, 14))
+        t_v = sum(matriz[d][h] for h in range(14, 18))
+        n_v = sum(matriz[d][h] for h in range(18, 23))
+        mad_v = sum(matriz[d][h] for h in [23, 0, 1, 2, 3, 4, 5])
+        tot_d = sum(matriz[d])
+        totales_dia.append(tot_d)
+        resumen_franjas.append({
+            "dia": nombres_dias[d], "manana": m_v, "mediodia": md_v,
+            "tarde": t_v, "noche": n_v, "madrugada": mad_v, "total": tot_d,
+        })
+    max_di = max(range(7), key=lambda i: totales_dia[i]) if totales_dia else 0
+    heatmap_matriz = {
+        "dias": nombres_dias,
+        "horas": [f"{h:02d}:00" for h in range(24)],
+        "matriz": matriz,
+        "total_semanal": total_semanal,
+        "dia_pico": {"dia": nombres_dias[max_di], "total": totales_dia[max_di] if totales_dia else 0},
+        "hora_pico": {"hora": max_ht or "00:00", "dia": max_hd or "Sin datos", "total": max(0, max_hv)},
+        "resumen_franjas": resumen_franjas,
+    }
+
+    # Formatear franjas (conversión acotada a 0..100%)
+    tot_traf = sum(v["trafico"] for v in franjas.values())
+    franjas_out = {}
+    for fk, fv in franjas.items():
+        conv = min(100.0, round((fv["interacciones"] / fv["trafico"]) * 100.0, 1)) if fv["trafico"] > 0 else 0.0
+        franjas_out[fk] = {
+            "trafico": fv["trafico"],
+            "interacciones": fv["interacciones"],
+            "permanencia": round(fv["perm_sum"] / fv["perm_cnt"], 1) if fv["perm_cnt"] else 0.0,
+            "conversion": conv,
+        }
+    franjas_out["porcentajes"] = {
+        "Mañana": round((franjas["manana"]["trafico"] / tot_traf) * 100, 1) if tot_traf else 0.0,
+        "Tarde": round((franjas["tarde"]["trafico"] / tot_traf) * 100, 1) if tot_traf else 0.0,
+        "Noche": round((franjas["noche"]["trafico"] / tot_traf) * 100, 1) if tot_traf else 0.0,
+    }
+
+    orden_perf = ["Express (<2.5s)", "Explorador (2.5-3.8s)", "Interesado (3.8-4.5s)", "Decisor (4.5s+)"]
+    perfiles_out = [
+        {"tipo": k, "cantidad": perfiles_acc[k][0], "promedio_seg": round(perfiles_acc[k][1] / perfiles_acc[k][0], 1)}
+        for k in orden_perf if k in perfiles_acc
+    ]
+    top_out = [
+        {"nombre": k, "interacciones": v}
+        for k, v in sorted(top_acc.items(), key=lambda kv: kv[1], reverse=True)[:6]
+    ]
+
+    return {
+        "serie_temporal": serie,
+        "heatmap_hora": {"labels": list(horas_map.keys()), "data": list(horas_map.values())},
+        "heatmap_matriz": heatmap_matriz,
+        "franjas": franjas_out,
+        "perfiles": perfiles_out,
+        "top_productos": top_out,
+    }
 
 
 def obtener_datos_publicidad(franja=None, dias=7, fecha_inicio: str = None, fecha_fin: str = None,

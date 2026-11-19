@@ -7,6 +7,7 @@ from ai_agent import KovaqMarketingAnalyticsEngine
 from auth import obtener_usuario_actual
 from database import (
     buscar_productos,
+    obtener_bundle_analitica,
     obtener_categorias_con_productos,
     obtener_datos_publicidad,
     obtener_heatmap_dia_hora,
@@ -292,7 +293,7 @@ async def stats_franjas(
 
     total_trafico = sum(v["trafico"] for v in franjas.values())
     for v in franjas.values():
-        v["conversion"] = round((v["interacciones"] / v["trafico"]) * 100.0, 1) if v["trafico"] > 0 else 0.0
+        v["conversion"] = min(100.0, round((v["interacciones"] / v["trafico"]) * 100.0, 1)) if v["trafico"] > 0 else 0.0
 
     if total_trafico > 0:
         porcentajes = {
@@ -452,6 +453,26 @@ async def publicidad(
 
     data["sugerencias"] = sugerencias
     return data
+
+
+@router.get("/bundle")
+async def bundle_analitica(
+    request: Request,
+    agrupacion: str = Query("semana", pattern="^(hora|dia|semana|mes)$"),
+    dias: int = Query(30, ge=1, le=365),
+    horas: int | None = Query(None, ge=1, le=168),
+    fecha_inicio: str | None = Query(None, pattern=_FECHA_PAT),
+    fecha_fin: str | None = Query(None, pattern=_FECHA_PAT),
+    hora_inicio: int | None = Query(None, ge=0, le=23),
+    hora_fin: int | None = Query(None, ge=0, le=23),
+    sucursal_id: str | None = Query(None, max_length=32),
+):
+    await obtener_usuario_actual(request)
+    return await _ejecutar_consulta(
+        obtener_bundle_analitica,
+        agrupacion, dias, fecha_inicio, fecha_fin,
+        horas=horas, hora_inicio=hora_inicio, hora_fin=hora_fin, sucursal_id=sucursal_id,
+    )
 
 
 @router.get("/resumen_publicidad")
