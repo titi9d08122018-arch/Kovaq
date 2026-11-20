@@ -10,6 +10,7 @@ from database import (
     obtener_bundle_analitica,
     obtener_categorias_con_productos,
     obtener_datos_publicidad,
+    obtener_fechas_con_datos,
     obtener_heatmap_dia_hora,
     obtener_heatmap_hora,
     obtener_interacciones_por_hora,
@@ -453,6 +454,15 @@ async def publicidad(
 
     data["sugerencias"] = sugerencias
     return data
+
+
+@router.get("/fechas_disponibles")
+async def fechas_disponibles(
+    request: Request,
+    sucursal_id: str | None = Query(None, max_length=32),
+):
+    await obtener_usuario_actual(request)
+    return await _ejecutar_consulta(obtener_fechas_con_datos, sucursal_id)
 
 
 @router.get("/bundle")

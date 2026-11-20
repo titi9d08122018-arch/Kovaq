@@ -1784,6 +1784,39 @@ def _obtener_metadatos_cacheados():
     return d
 
 
+def obtener_fechas_con_datos(sucursal_id: str = None):
+    """Devuelve únicamente las fechas (YYYY-MM-DD) que tienen datos reales registrados para acotar el calendario."""
+    suc = (sucursal_id or "").strip()
+    if suc and suc.lower() != "todas":
+        filas = leer(
+            """
+            SELECT date(creado) AS dia, COUNT(*) AS total
+            FROM eventos
+            WHERE tipo = 'trafico' AND sucursal_id = ?
+            GROUP BY dia
+            ORDER BY dia ASC
+            """,
+            (suc,),
+        )
+    else:
+        filas = leer(
+            """
+            SELECT date(creado) AS dia, COUNT(*) AS total
+            FROM eventos
+            WHERE tipo = 'trafico'
+            GROUP BY dia
+            ORDER BY dia ASC
+            """
+        )
+    fechas = [{"fecha": str(r[0]), "visitas": int(r[1] or 0)} for r in filas if r[0]]
+    return {
+        "min_fecha": fechas[0]["fecha"] if fechas else None,
+        "max_fecha": fechas[-1]["fecha"] if fechas else None,
+        "total_dias": len(fechas),
+        "fechas": fechas,
+    }
+
+
 def _normalizar_nombre_producto(detalle: str) -> str:
     txt = str(detalle or "").strip()
     if " (" in txt:
@@ -2117,10 +2150,13 @@ def obtener_bundle_dashboard(
     grid_round = [[round(v, 2) for v in fila] for fila in grid]
     max_int = max((max(fila) for fila in grid_round), default=0.0)
 
+    fechas_disp = obtener_fechas_con_datos(sucursal_id=sucursal_id)
+
     return {
         "stats": stats,
         "resumen_publicidad": resumen_pub,
         "inventario": inventario,
+        "fechas_disponibles": fechas_disp,
         "mapa_base": {
             "sucursal_id": suc_obj["id"] if suc_obj else "SUC-NORTE",
             "sucursal_nombre": suc_obj["nombre"] if suc_obj else "Matriz Norte",

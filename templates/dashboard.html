@@ -1,127 +1,201 @@
 {% extends "base.html" %}
-{% block title %}Panel de Control y Analítica de Percha • KOVAQ Analytics{% endblock %}
+{% block title %}Productos y Conducta en Percha • KOVAQ Analytics{% endblock %}
 
 {% block extra_head %}
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js" defer></script>
 {% endblock %}
 
 {% block content %}
-<div class="p-4 sm:p-6 lg:p-8 max-w-[1680px] mx-auto space-y-6">
+<div class="p-4 sm:p-6 lg:p-8 max-w-[1680px] mx-auto space-y-5">
 
-    <header class="card-kovaq p-5 sm:p-6">
-        <div class="flex flex-col gap-4">
+    <!-- Cabecera serena con selector compacto por menús desplegables y calendario de fechas con datos -->
+    <header class="card-kovaq overflow-visible relative">
+        <div id="toolbar-progress-track" class="kovaq-progress-track" aria-hidden="true">
+            <div class="kovaq-progress-bar"></div>
+        </div>
+
+        <div class="p-4 sm:p-5 space-y-4">
             <div class="flex flex-wrap items-start justify-between gap-3">
-                <div>
-                    <h1 class="text-xl sm:text-2xl lg:text-3xl font-extrabold text-kovaq-navy font-title tracking-tight m-0">
-                        Panel de Control y Analítica de Percha
+                <div class="min-w-0">
+                    <h1 class="text-xl sm:text-2xl font-extrabold text-kovaq-navy font-title tracking-tight m-0">
+                        Productos y Conducta en Percha
                     </h1>
                     <p id="subtitulo-periodo-activo" class="text-xs sm:text-sm text-kovaq-slate mt-1 mb-0">
-                        Telemetría anónima por coordenadas 2D, mapa de calor y datos históricos por sucursal.
+                        Matriz Norte • Últimos 30 días (Semana) • Todo el día
                     </p>
                 </div>
                 <div class="flex flex-wrap items-center gap-2">
-                    <div class="flex items-center gap-2 bg-slate-50 border border-kovaq-control rounded-xl px-2.5 py-1">
-                        <i class="bi bi-building text-kovaq-orange" aria-hidden="true"></i>
-                        <label for="select-sucursal-global" class="text-xs font-bold text-kovaq-navy whitespace-nowrap">Sucursal:</label>
-                        <select id="select-sucursal-global" class="bg-transparent text-xs font-bold text-kovaq-navy focus:outline-none min-h-[32px] pr-2">
-                            <option value="SUC-NORTE">Matriz Norte • Quito</option>
-                            <option value="SUC-CENTRO">Plaza Centro • Guayaquil</option>
-                            <option value="SUC-SUR">Hiper Sur • Cuenca</option>
-                            <option value="todas">Todas las sucursales (Consolidado)</option>
-                        </select>
-                    </div>
                     <span id="estado-sistema-badge" class="inline-flex items-center gap-1.5 bg-emerald-100 text-emerald-900 text-xs font-mono-num font-bold px-3 py-1.5 rounded-lg">
                         <i class="bi bi-broadcast" aria-hidden="true"></i>
                         <span id="estado-sistema-texto">Sistema activo</span>
                     </span>
-                    <span id="badge-rango-fechas" class="inline-flex items-center gap-1.5 bg-orange-50 text-kovaq-orange border border-orange-200 text-xs font-mono-num font-bold px-3 py-1.5 rounded-lg">
-                        Últimos 30 días (Semana)
-                    </span>
-                </div>
-            </div>
-
-            <!-- Barra global de selección temporal: horas, días, semanas, meses, franja horaria y fechas -->
-            <div class="w-full flex flex-col gap-3 bg-slate-50 border border-kovaq-border p-3.5 rounded-xl">
-                <div class="flex flex-wrap items-center justify-between gap-3">
-                    <div class="flex flex-wrap items-center gap-2" role="group" aria-label="Ventana de análisis histórico">
-                        <span class="text-xs font-title font-bold text-kovaq-navy flex items-center gap-1.5">
-                            <i class="bi bi-clock-history text-kovaq-orange" aria-hidden="true"></i>
-                            Período:
-                        </span>
-                        <div class="flex flex-wrap items-center gap-1.5">
-                            <button type="button" id="btn-periodo-1h" data-agrup="hora" data-horas="1" aria-pressed="false" class="btn-periodo-preset min-h-[36px] px-3 py-1 rounded-lg text-xs font-bold border border-kovaq-control bg-white text-kovaq-navy">
-                                Última 1h
-                            </button>
-                            <button type="button" id="btn-periodo-6h" data-agrup="hora" data-horas="6" aria-pressed="false" class="btn-periodo-preset min-h-[36px] px-3 py-1 rounded-lg text-xs font-bold border border-kovaq-control bg-white text-kovaq-navy">
-                                6 Horas
-                            </button>
-                            <button type="button" id="btn-periodo-dia" data-agrup="hora" data-horas="24" aria-pressed="false" class="btn-periodo-preset min-h-[36px] px-3 py-1 rounded-lg text-xs font-bold border border-kovaq-control bg-white text-kovaq-navy">
-                                Hoy (24h)
-                            </button>
-                            <button type="button" id="btn-periodo-semana" data-agrup="dia" data-dias="7" aria-pressed="false" class="btn-periodo-preset min-h-[36px] px-3 py-1 rounded-lg text-xs font-bold border border-kovaq-control bg-white text-kovaq-navy">
-                                7 Días
-                            </button>
-                            <button type="button" id="btn-periodo-mes" data-agrup="semana" data-dias="30" aria-pressed="true" class="btn-periodo-preset min-h-[36px] px-3 py-1 rounded-lg text-xs font-bold border border-kovaq-navy bg-kovaq-navy text-white">
-                                30 Días
-                            </button>
-                            <button type="button" id="btn-periodo-trimestre" data-agrup="mes" data-dias="90" aria-pressed="false" class="btn-periodo-preset min-h-[36px] px-3 py-1 rounded-lg text-xs font-bold border border-kovaq-control bg-white text-kovaq-navy">
-                                90 Días
-                            </button>
-                        </div>
-                    </div>
-
-                    <div class="flex flex-wrap items-center gap-2 text-xs">
-                        <span class="inline-flex items-center gap-1.5">
-                            <label for="filtro-hora-inicio" class="font-bold text-kovaq-navy whitespace-nowrap">Horas:</label>
-                            <select id="filtro-hora-inicio" class="kovaq-select min-h-[36px] py-1 px-2 text-xs font-mono-num" aria-label="Hora de inicio">
-                                <option value="">Desde 00:00</option>
-                                {% for h in range(24) %}
-                                <option value="{{ h }}">{{ "%02d:00"|format(h) }}</option>
-                                {% endfor %}
-                            </select>
-                        </span>
-                        <span class="inline-flex items-center gap-1.5">
-                            <span class="text-kovaq-slate font-bold">a</span>
-                            <select id="filtro-hora-fin" class="kovaq-select min-h-[36px] py-1 px-2 text-xs font-mono-num" aria-label="Hora de fin">
-                                <option value="">Hasta 23:59</option>
-                                {% for h in range(24) %}
-                                <option value="{{ h }}">{{ "%02d:59"|format(h) }}</option>
-                                {% endfor %}
-                            </select>
-                        </span>
-                    </div>
-                </div>
-
-                <div class="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-kovaq-border text-xs">
-                    <div class="flex flex-wrap items-center gap-2">
-                        <span class="inline-flex items-center gap-1.5">
-                            <label for="filtro-fecha-inicio" class="font-bold text-kovaq-navy whitespace-nowrap">Desde fecha</label>
-                            <input type="date" id="filtro-fecha-inicio" class="kovaq-input min-h-[36px] py-1 px-2 text-xs font-mono-num">
-                        </span>
-                        <span class="inline-flex items-center gap-1.5">
-                            <label for="filtro-fecha-fin" class="font-bold text-kovaq-navy whitespace-nowrap">Hasta fecha</label>
-                            <input type="date" id="filtro-fecha-fin" class="kovaq-input min-h-[36px] py-1 px-2 text-xs font-mono-num">
-                        </span>
-                        <div class="inline-flex items-center gap-1.5">
-                            <button type="button" id="btn-aplicar-rango" class="btn-kovaq-primary min-h-[36px] text-xs px-3.5 whitespace-nowrap">
-                                Aplicar filtro
-                            </button>
-                            <button type="button" id="btn-limpiar-filtros" class="btn-kovaq-outline min-h-[36px] text-xs whitespace-nowrap">
-                                Limpiar
-                            </button>
-                        </div>
-                    </div>
-                    <span id="indicador-carga-datos" role="status" aria-live="polite" class="text-xs font-mono-num font-bold text-kovaq-slate">
+                    <span id="indicador-carga-datos" role="status" aria-live="polite" class="text-xs font-mono-num font-semibold text-kovaq-slate bg-slate-100 px-2.5 py-1.5 rounded-lg">
                         Sincronizado
                     </span>
                 </div>
             </div>
+
+            <!-- Barra única y despejada de 4 selectores desplegables -->
+            <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5 bg-slate-50 border border-kovaq-border p-3 rounded-xl">
+                <!-- 1. Sucursal -->
+                <div class="flex flex-col gap-1">
+                    <label for="select-sucursal-global" class="text-[11px] font-bold uppercase tracking-wider text-kovaq-slate">
+                        Sucursal
+                    </label>
+                    <select id="select-sucursal-global" class="kovaq-select w-full text-xs font-semibold">
+                        <option value="SUC-NORTE">Matriz Norte (Quito)</option>
+                        <option value="SUC-CENTRO">Plaza Centro (Guayaquil)</option>
+                        <option value="SUC-SUR">Hiper Sur (Cuenca)</option>
+                        <option value="todas">Todas las sucursales (Consolidado)</option>
+                    </select>
+                </div>
+
+                <!-- 2. Ventana / Período -->
+                <div class="flex flex-col gap-1">
+                    <label for="select-periodo-preset" class="text-[11px] font-bold uppercase tracking-wider text-kovaq-slate">
+                        Período
+                    </label>
+                    <select id="select-periodo-preset" class="kovaq-select w-full text-xs font-semibold">
+                        <option value="1h">Última 1 hora</option>
+                        <option value="6h">Últimas 6 horas</option>
+                        <option value="24h">Hoy (24 horas)</option>
+                        <option value="7d">Últimos 7 días</option>
+                        <option value="30d" selected>Últimos 30 días</option>
+                        <option value="90d">Últimos 90 días</option>
+                    </select>
+                </div>
+
+                <!-- 3. Franja horaria -->
+                <div class="flex flex-col gap-1">
+                    <label for="select-horario-preset" class="text-[11px] font-bold uppercase tracking-wider text-kovaq-slate">
+                        Horario
+                    </label>
+                    <select id="select-horario-preset" class="kovaq-select w-full text-xs font-semibold">
+                        <option value="todo" selected>Todo el día (00h a 23h)</option>
+                        <option value="manana">Mañana (06h a 11h)</option>
+                        <option value="mediodia">Mediodía (11h a 14h)</option>
+                        <option value="tarde">Tarde (14h a 18h)</option>
+                        <option value="noche">Noche (18h a 23h)</option>
+                        <option value="personalizado">Personalizado...</option>
+                    </select>
+                </div>
+
+                <!-- 4. Calendario inteligente restringido a fechas con registros -->
+                <div class="flex flex-col gap-1 relative">
+                    <span class="text-[11px] font-bold uppercase tracking-wider text-kovaq-slate">
+                        Fechas con datos
+                    </span>
+                    <button
+                        type="button"
+                        id="btn-abrir-calendario"
+                        aria-expanded="false"
+                        aria-controls="popover-calendario"
+                        class="kovaq-select w-full text-xs font-semibold flex items-center justify-between gap-2 text-left"
+                    >
+                        <span class="inline-flex items-center gap-2 truncate">
+                            <i class="bi bi-calendar3 text-kovaq-orange shrink-0" aria-hidden="true"></i>
+                            <span id="lbl-boton-calendario" class="truncate">Elegir fechas</span>
+                        </span>
+                        <i class="bi bi-chevron-down text-kovaq-slate shrink-0" aria-hidden="true"></i>
+                    </button>
+
+                    <!-- Popover del calendario inteligente (solo meses y días con registros) -->
+                    <div
+                        id="popover-calendario"
+                        role="dialog"
+                        aria-label="Selector de fechas con datos registrados"
+                        class="kovaq-popover hidden w-[320px] p-4 space-y-3"
+                    >
+                        <div class="flex items-start justify-between gap-2">
+                            <div>
+                                <p class="text-xs font-extrabold text-kovaq-navy font-title m-0">Fechas con registros</p>
+                                <p id="cal-rango-disponible" class="text-[11px] text-kovaq-slate m-0 mt-0.5">
+                                    Cargando disponibilidad...
+                                </p>
+                            </div>
+                            <button
+                                type="button"
+                                id="btn-cerrar-calendario"
+                                class="min-w-[32px] min-h-[32px] rounded-lg text-kovaq-slate hover:bg-slate-100 flex items-center justify-center"
+                                aria-label="Cerrar calendario"
+                            >
+                                <i class="bi bi-x-lg text-xs" aria-hidden="true"></i>
+                            </button>
+                        </div>
+
+                        <div class="flex items-center justify-between gap-2 bg-slate-50 border border-kovaq-border rounded-lg px-2 py-1.5">
+                            <button
+                                type="button"
+                                id="btn-cal-prev"
+                                class="min-w-[32px] min-h-[32px] rounded-md hover:bg-white border border-transparent hover:border-kovaq-border flex items-center justify-center text-kovaq-navy"
+                                aria-label="Mes anterior con datos"
+                            >
+                                <i class="bi bi-chevron-left text-xs" aria-hidden="true"></i>
+                            </button>
+                            <span id="cal-mes-titulo" class="text-xs font-extrabold text-kovaq-navy font-title capitalize">
+                                Cargando...
+                            </span>
+                            <button
+                                type="button"
+                                id="btn-cal-next"
+                                class="min-w-[32px] min-h-[32px] rounded-md hover:bg-white border border-transparent hover:border-kovaq-border flex items-center justify-center text-kovaq-navy"
+                                aria-label="Mes siguiente con datos"
+                            >
+                                <i class="bi bi-chevron-right text-xs" aria-hidden="true"></i>
+                            </button>
+                        </div>
+
+                        <div class="cal-grid text-center text-[10px] font-bold text-kovaq-slate uppercase" aria-hidden="true">
+                            <span>Lu</span><span>Ma</span><span>Mi</span><span>Ju</span><span>Vi</span><span>Sá</span><span>Do</span>
+                        </div>
+                        <div id="cal-dias-grid" class="cal-grid" role="grid" aria-label="Días disponibles con datos"></div>
+
+                        <div class="flex items-center justify-between gap-2 pt-2 border-t border-kovaq-border">
+                            <span id="cal-seleccion-texto" class="text-[11px] font-mono-num text-kovaq-slate truncate">
+                                Elige 1 día o rango
+                            </span>
+                            <div class="flex items-center gap-1.5 shrink-0">
+                                <button type="button" id="btn-limpiar-filtros" class="btn-kovaq-outline min-h-[32px] text-[11px] px-2.5">
+                                    Limpiar
+                                </button>
+                                <button type="button" id="btn-aplicar-rango" class="btn-kovaq-primary min-h-[32px] text-[11px] px-3">
+                                    Aplicar
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Panel desplegable inline únicamente cuando se elige Horario Personalizado -->
+            <div id="panel-horario-personalizado" class="hidden flex flex-wrap items-center gap-3 bg-slate-50 border border-kovaq-border rounded-xl px-3.5 py-2.5 text-xs">
+                <span class="font-bold text-kovaq-navy">Rango horario exacto:</span>
+                <label for="filtro-hora-inicio" class="sr-only">Hora de inicio</label>
+                <select id="filtro-hora-inicio" class="kovaq-select min-h-[34px] py-1 px-2 text-xs font-mono-num">
+                    <option value="">Desde 00:00</option>
+                    {% for h in range(24) %}
+                    <option value="{{ h }}">{{ "%02d:00"|format(h) }}</option>
+                    {% endfor %}
+                </select>
+                <span class="text-kovaq-slate font-semibold">hasta</span>
+                <label for="filtro-hora-fin" class="sr-only">Hora de fin</label>
+                <select id="filtro-hora-fin" class="kovaq-select min-h-[34px] py-1 px-2 text-xs font-mono-num">
+                    <option value="">Hasta 23:59</option>
+                    {% for h in range(24) %}
+                    <option value="{{ h }}">{{ "%02d:59"|format(h) }}</option>
+                    {% endfor %}
+                </select>
+                <button type="button" id="btn-reset-horario" class="btn-kovaq-outline min-h-[34px] text-xs px-2.5">
+                    Todo el día
+                </button>
+            </div>
+
             <div id="global-status-banner" role="status" aria-live="polite" class="hidden text-xs font-semibold px-3 py-2 rounded-lg border"></div>
         </div>
     </header>
 
-    <!-- Navegación ARIA Tablist en 5 módulos -->
-    <div role="tablist" aria-label="Módulos del dashboard" class="flex flex-wrap items-center gap-2 pb-1">
+    <!-- Navegación ARIA Tablist en 5 módulos orientados a productos -->
+    <div role="tablist" aria-label="Módulos del dashboard" class="flex flex-wrap items-center gap-2">
         <button type="button" role="tab" id="btn-tab-vivo" aria-selected="true" aria-controls="tab-vivo" tabindex="0" class="tab-kovaq-pill active">
             <i class="bi bi-camera-video-fill" aria-hidden="true"></i>
             <span>1. En Vivo</span>
@@ -132,40 +206,74 @@
         </button>
         <button type="button" role="tab" id="btn-tab-inventario" aria-selected="false" aria-controls="tab-inventario" tabindex="-1" class="tab-kovaq-pill">
             <i class="bi bi-box-seam" aria-hidden="true"></i>
-            <span>3. Inventario</span>
+            <span>3. Productos</span>
         </button>
         <button type="button" role="tab" id="btn-tab-marketing" aria-selected="false" aria-controls="tab-marketing" tabindex="-1" class="tab-kovaq-pill">
-            <i class="bi bi-megaphone" aria-hidden="true"></i>
-            <span>4. Marketing</span>
+            <i class="bi bi-stars" aria-hidden="true"></i>
+            <span>4. Asistente IA</span>
         </button>
         <button type="button" role="tab" id="btn-tab-config" aria-selected="false" aria-controls="tab-config" tabindex="-1" class="tab-kovaq-pill">
-            <i class="bi bi-gear" aria-hidden="true"></i>
+            <i class="bi bi-sliders" aria-hidden="true"></i>
             <span>5. Configuración</span>
         </button>
     </div>
 
-    <!-- Módulo 1: Vista en vivo y plano arquitectónico 2D con mapa de calor enlazado -->
-    <section id="tab-vivo" role="tabpanel" aria-labelledby="btn-tab-vivo" class="module-pane active space-y-6">
-        <h2 class="sr-only">Vista en vivo, mapa arquitectónico de calor e indicadores del período</h2>
+    <!-- ======================================================================= -->
+    <!-- MÓDULO 1: EN VIVO (Mapa de Perchas + Cámara Trackeo + Conducta Producto) -->
+    <!-- ======================================================================= -->
+    <section id="tab-vivo" role="tabpanel" aria-labelledby="btn-tab-vivo" class="module-pane active space-y-5">
+        <h2 class="sr-only">Vista en vivo, mapa de perchas e indicadores de conducta frente al producto</h2>
 
-        <div class="grid grid-cols-1 xl:grid-cols-12 gap-6">
-            <!-- Plano Arquitectónico Real + Mapa de Calor Enlazado a Período y Sucursal -->
+        <!-- Escenario principal: Plano Arquitectónico + Cámara en Vivo -->
+        <div class="grid grid-cols-1 xl:grid-cols-12 gap-5">
+            <!-- Plano Arquitectónico 2D + Mapa de Calor -->
             <div class="xl:col-span-7 card-kovaq p-5 flex flex-col justify-between gap-3">
                 <div class="flex flex-wrap items-start justify-between gap-3">
-                    <div>
+                    <div class="min-w-0">
                         <h3 class="text-base sm:text-lg font-extrabold text-kovaq-navy font-title m-0 flex items-center gap-2">
                             <i class="bi bi-map text-kovaq-orange" aria-hidden="true"></i>
-                            <span id="titulo-plano-sucursal">Mapa de Infraestructura y Zonas Calientes / Frías</span>
+                            <span id="titulo-plano-sucursal">Mapa de Perchas y Calor</span>
                         </h3>
                         <p id="subtitulo-plano-arquitectura" class="text-xs text-kovaq-slate mt-0.5 mb-0">
-                            Planta arquitectónica real con cámaras, cajas, accesos y mapa de calor sincronizado al período activo.
+                            Planta arquitectónica con cámaras, góndolas y actividad sincronizada al período.
                         </p>
                     </div>
-                    <div class="flex flex-wrap items-center gap-1.5">
-                        <button type="button" id="btn-capa-calor" aria-pressed="true" class="map-layer-pill active">Calor</button>
-                        <button type="button" id="btn-capa-fov" aria-pressed="true" class="map-layer-pill active">Cámaras FOV</button>
-                        <button type="button" id="btn-capa-vectores" aria-pressed="true" class="map-layer-pill active">Vectores</button>
-                        <button type="button" id="btn-toggle-sim" class="btn-kovaq-outline text-xs min-h-[32px] px-2.5">
+                    <!-- Solo 2 controles limpios en cabecera: Menú desplegable de Capas + Pausar -->
+                    <div class="flex items-center gap-2 relative">
+                        <button
+                            type="button"
+                            id="btn-menu-capas"
+                            aria-expanded="false"
+                            aria-controls="popover-capas"
+                            class="btn-kovaq-outline text-xs min-h-[34px] px-3"
+                        >
+                            <i class="bi bi-layers" aria-hidden="true"></i>
+                            <span>Capas</span>
+                            <i class="bi bi-chevron-down text-[10px]" aria-hidden="true"></i>
+                        </button>
+
+                        <div
+                            id="popover-capas"
+                            role="dialog"
+                            aria-label="Capas visibles del mapa"
+                            class="kovaq-popover hidden w-56 p-3 space-y-2"
+                        >
+                            <p class="text-[11px] font-bold uppercase tracking-wider text-kovaq-slate m-0">Capas del mapa</p>
+                            <button type="button" id="btn-capa-calor" aria-pressed="true" class="map-layer-pill active w-full flex items-center justify-between">
+                                <span>Mapa de calor</span>
+                                <i class="bi bi-check2" aria-hidden="true"></i>
+                            </button>
+                            <button type="button" id="btn-capa-fov" aria-pressed="true" class="map-layer-pill active w-full flex items-center justify-between">
+                                <span>Cámaras FOV</span>
+                                <i class="bi bi-check2" aria-hidden="true"></i>
+                            </button>
+                            <button type="button" id="btn-capa-vectores" aria-pressed="true" class="map-layer-pill active w-full flex items-center justify-between">
+                                <span>Personas en vivo</span>
+                                <i class="bi bi-check2" aria-hidden="true"></i>
+                            </button>
+                        </div>
+
+                        <button type="button" id="btn-toggle-sim" class="btn-kovaq-outline text-xs min-h-[34px] px-3">
                             <i class="bi bi-pause-circle" aria-hidden="true"></i>
                             <span id="txt-toggle-sim">Pausar</span>
                         </button>
@@ -173,11 +281,11 @@
                 </div>
 
                 <div class="map-stage-container">
-                    <canvas id="store-map-canvas" width="960" height="480" role="img" aria-label="Mapa arquitectónico 2D con infraestructura real, cámaras CCTV, góndolas y mapa de calor del período seleccionado." class="w-full h-full block"></canvas>
+                    <canvas id="store-map-canvas" width="960" height="480" role="img" aria-label="Mapa arquitectónico 2D con cámaras, góndolas y mapa de calor del período seleccionado." class="w-full h-full block"></canvas>
                     <div id="map-tooltip" class="hidden absolute z-20 pointer-events-none bg-[#0C2340] text-white text-xs rounded-lg px-3 py-2 shadow-lg max-w-[240px]"></div>
                 </div>
 
-                <div class="flex flex-wrap items-center justify-between gap-3 text-xs text-kovaq-slate border-t border-kovaq-border pt-3">
+                <div class="flex flex-wrap items-center justify-between gap-3 text-xs text-kovaq-slate border-t border-kovaq-border pt-2.5">
                     <div class="flex flex-wrap items-center gap-3">
                         <span class="inline-flex items-center gap-2 font-semibold text-kovaq-navy">
                             <span>Fría</span>
@@ -185,64 +293,39 @@
                             <span>Caliente</span>
                         </span>
                         <span class="inline-flex items-center gap-1.5 font-semibold text-kovaq-navy">
-                            <i class="bi bi-camera-video-fill text-kovaq-orange" aria-hidden="true"></i> Cámara CCTV
+                            <i class="bi bi-camera-video-fill text-kovaq-orange" aria-hidden="true"></i> Cámara
                         </span>
                         <span class="inline-flex items-center gap-1.5 font-semibold text-kovaq-navy">
                             <i class="bi bi-circle-fill text-emerald-600" aria-hidden="true"></i> Cliente
-                        </span>
-                        <span class="inline-flex items-center gap-1.5 font-semibold text-kovaq-navy">
-                            <i class="bi bi-diamond-fill text-slate-500" aria-hidden="true"></i> Personal
                         </span>
                     </div>
                     <span class="font-mono-num font-bold text-kovaq-navy" id="map-handoff-counter">0 muestras térmicas</span>
                 </div>
             </div>
 
-            <!-- Visor de Video con Trackeo Real YOLOv8n + Polígonos en Perspectiva -->
+            <!-- Cámara en Vivo con Polígonos en Perspectiva y Trackeo -->
             <div class="xl:col-span-5 card-kovaq p-5 flex flex-col justify-between gap-3">
                 <div class="flex flex-wrap items-center justify-between gap-2">
-                    <div>
-                        <h3 class="text-base sm:text-lg font-extrabold text-kovaq-navy font-title m-0" id="titulo-camara-activa">
-                            Cámara 12 • Pasillo Central
+                    <div class="min-w-0">
+                        <h3 class="text-base sm:text-lg font-extrabold text-kovaq-navy font-title m-0 truncate" id="titulo-camara-activa">
+                            CAM-01 • Pasillo Central
                         </h3>
-                        <p class="text-xs text-kovaq-slate m-0">Polígonos en perspectiva por percha y seguimiento anónimo de personas en tiempo real.</p>
+                        <p class="text-xs text-kovaq-slate m-0">Trackeo en vivo frente a la percha con polígonos en perspectiva.</p>
                     </div>
-                    <button type="button" id="btn-toggle-video-play" class="btn-kovaq-outline text-xs min-h-[36px]" aria-pressed="false">
+                    <button type="button" id="btn-toggle-video-play" class="btn-kovaq-outline text-xs min-h-[34px] px-3" aria-pressed="false">
                         <i class="bi bi-pause-fill" aria-hidden="true"></i>
                         <span id="txt-toggle-video-play">Pausar</span>
                     </button>
                 </div>
 
-                <div class="space-y-2.5">
-                    <div>
-                        <label for="select-camara-mapa" class="block text-xs font-bold text-kovaq-navy mb-1">Cámara en plano</label>
-                        <select id="select-camara-mapa" class="kovaq-select w-full text-xs">
-                            <option value="CAM-01">CAM-01 • Pasillo Central</option>
-                            <option value="CAM-02">CAM-02 • Lácteos y Bebidas</option>
-                            <option value="CAM-03">CAM-03 • Hogar y Cajas</option>
-                        </select>
-                    </div>
-                    <div>
-                        <label for="select-camara" class="block text-xs font-bold text-kovaq-navy mb-1">Fuente de video</label>
-                        <div class="flex items-center gap-2">
-                            <select id="select-camara" class="kovaq-select flex-1 min-w-0 text-xs">
-                                <option value="video">Video Demo (10s)</option>
-                                <option value="webcam">Cámara Web USB</option>
-                                <option value="rtsp">Cámara IP (RTSP)</option>
-                            </select>
-                            <button type="button" id="btn-conectar-fuente" class="btn-kovaq-outline text-xs shrink-0 whitespace-nowrap">
-                                Conectar
-                            </button>
-                        </div>
-                    </div>
-                </div>
-
-                <div id="rtsp-input-panel" class="hidden flex flex-wrap items-end gap-2 bg-slate-50 border border-kovaq-border p-2.5 rounded-xl">
-                    <div class="flex-1 min-w-[180px]">
-                        <label for="input-rtsp-url" class="block text-xs font-bold text-kovaq-navy mb-1">URL RTSP de cámara</label>
-                        <input type="url" id="input-rtsp-url" placeholder="rtsp://192.168.1.50:554/stream1" class="kovaq-input w-full text-xs font-mono-num">
-                    </div>
-                    <button type="button" id="btn-conectar-rtsp" class="btn-kovaq-primary min-h-[40px] text-xs">Aplicar RTSP</button>
+                <!-- Selector compacto de cámara -->
+                <div class="flex items-center gap-2">
+                    <label for="select-camara-mapa" class="text-xs font-bold text-kovaq-navy whitespace-nowrap">Cámara:</label>
+                    <select id="select-camara-mapa" class="kovaq-select flex-1 min-w-0 text-xs">
+                        <option value="CAM-01">CAM-01 • Pasillo Central</option>
+                        <option value="CAM-02">CAM-02 • Lácteos y Bebidas</option>
+                        <option value="CAM-03">CAM-03 • Hogar y Cajas</option>
+                    </select>
                 </div>
 
                 <div class="hud-stage">
@@ -258,57 +341,89 @@
                     <div id="feed-loading-toast" role="status" aria-live="polite" class="hidden absolute top-3 left-3 z-20 bg-kovaq-navy text-white text-xs font-bold px-3 py-1.5 rounded-lg"></div>
                 </div>
 
-                <div class="bg-slate-50 border border-kovaq-border rounded-xl p-3 flex flex-col gap-2">
-                    <div class="flex flex-wrap items-center justify-between gap-2">
-                        <label for="archivo-input" class="text-xs font-bold text-kovaq-navy">
-                            Subir video o foto para análisis inmediato
-                        </label>
-                        <button type="button" id="btn-subir-archivo" class="btn-kovaq-primary min-h-[38px] text-xs">
-                            <i class="bi bi-cloud-upload" aria-hidden="true"></i>
-                            <span>Analizar archivo</span>
-                        </button>
+                <!-- Menú desplegable progresivo para fuente RTSP / USB y carga de video/foto -->
+                <details class="kovaq-disclosure">
+                    <summary>
+                        <span class="text-xs font-bold text-kovaq-navy flex items-center gap-2">
+                            <i class="bi bi-sliders2 text-kovaq-orange" aria-hidden="true"></i>
+                            <span>Cambiar fuente de video o analizar archivo</span>
+                        </span>
+                        <i class="bi bi-chevron-down disclosure-chevron text-xs" aria-hidden="true"></i>
+                    </summary>
+                    <div class="disclosure-body pt-3 space-y-3">
+                        <div class="space-y-1.5">
+                            <label for="select-camara" class="block text-xs font-bold text-kovaq-navy">Fuente de video</label>
+                            <div class="flex items-center gap-2">
+                                <select id="select-camara" class="kovaq-select flex-1 min-w-0 text-xs">
+                                    <option value="video">Video Demo (10s)</option>
+                                    <option value="webcam">Cámara Web USB</option>
+                                    <option value="rtsp">Cámara IP (RTSP)</option>
+                                </select>
+                                <button type="button" id="btn-conectar-fuente" class="btn-kovaq-outline text-xs shrink-0 whitespace-nowrap">
+                                    Conectar
+                                </button>
+                            </div>
+                        </div>
+
+                        <div id="rtsp-input-panel" class="hidden flex flex-wrap items-end gap-2 bg-slate-50 border border-kovaq-border p-2.5 rounded-xl">
+                            <div class="flex-1 min-w-[160px]">
+                                <label for="input-rtsp-url" class="block text-xs font-bold text-kovaq-navy mb-1">URL RTSP</label>
+                                <input type="url" id="input-rtsp-url" placeholder="rtsp://192.168.1.50:554/stream1" class="kovaq-input w-full text-xs font-mono-num">
+                            </div>
+                            <button type="button" id="btn-conectar-rtsp" class="btn-kovaq-primary min-h-[38px] text-xs">Aplicar</button>
+                        </div>
+
+                        <div class="pt-2 border-t border-kovaq-border space-y-2">
+                            <div class="flex flex-wrap items-center justify-between gap-2">
+                                <label for="archivo-input" class="text-xs font-bold text-kovaq-navy">Subir video o imagen</label>
+                                <button type="button" id="btn-subir-archivo" class="btn-kovaq-primary min-h-[34px] text-xs px-3">
+                                    <i class="bi bi-cloud-upload" aria-hidden="true"></i>
+                                    <span>Analizar</span>
+                                </button>
+                            </div>
+                            <input type="file" id="archivo-input" accept=".mp4,.avi,.mov,.mkv,.jpg,.jpeg,.png,.webp" class="w-full max-w-full text-xs text-kovaq-navy file:mr-2 file:py-1 file:px-2.5 file:rounded-lg file:border file:border-kovaq-control file:bg-white file:text-kovaq-navy file:font-bold">
+                            <div id="upload-status" role="status" aria-live="polite" class="text-xs font-semibold text-kovaq-slate min-h-[16px]"></div>
+                        </div>
                     </div>
-                    <input type="file" id="archivo-input" accept=".mp4,.avi,.mov,.mkv,.jpg,.jpeg,.png,.webp" class="w-full max-w-full text-xs text-kovaq-navy file:mr-2 file:py-1.5 file:px-3 file:rounded-lg file:border file:border-kovaq-control file:bg-white file:text-kovaq-navy file:font-bold">
-                    <div id="upload-status" role="status" aria-live="polite" class="text-xs font-semibold text-kovaq-slate min-h-[18px]"></div>
-                </div>
+                </details>
             </div>
         </div>
 
-        <!-- KPIs del Período Histórico Seleccionado (Fuente Única: /api/stats) -->
+        <!-- 4 KPIs Principales de Productos y Conducta en Percha -->
         <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-            <div class="card-kovaq p-5">
-                <p class="text-xs font-bold uppercase tracking-wider text-kovaq-slate m-0">Tráfico del Período</p>
+            <div class="card-kpi p-5">
+                <p class="text-xs font-bold uppercase tracking-wider text-kovaq-slate m-0">Visitantes en Percha</p>
                 <p id="stat-hist-trafico" class="text-3xl font-extrabold text-kovaq-navy font-mono-num mt-2 mb-1">0</p>
-                <p class="text-xs text-kovaq-slate m-0">Clientes validados Puerta a Caja</p>
+                <p class="text-xs text-kovaq-slate m-0">Clientes validados en el período</p>
             </div>
-            <div class="card-kovaq p-5">
-                <p class="text-xs font-bold uppercase tracking-wider text-kovaq-slate m-0">Retención Promedio</p>
+            <div class="card-kpi p-5">
+                <p class="text-xs font-bold uppercase tracking-wider text-kovaq-slate m-0">Permanencia Media</p>
                 <p id="stat-hist-permanencia" class="text-3xl font-extrabold text-kovaq-orange font-mono-num mt-2 mb-1">0.0 s</p>
-                <p class="text-xs text-kovaq-slate m-0">Parada visual media frente a góndola</p>
+                <p class="text-xs text-kovaq-slate m-0">Tiempo promedio frente a productos</p>
             </div>
-            <div class="card-kovaq p-5">
-                <p class="text-xs font-bold uppercase tracking-wider text-kovaq-slate m-0">Tomas de Producto</p>
+            <div class="card-kpi p-5">
+                <p class="text-xs font-bold uppercase tracking-wider text-kovaq-slate m-0">Productos Tomados</p>
                 <p id="stat-hist-tomados" class="text-3xl font-extrabold text-kovaq-navy font-mono-num mt-2 mb-1">0</p>
                 <p id="stat-hist-devueltos" class="text-xs text-kovaq-slate m-0">0 devueltos a último momento</p>
             </div>
-            <div class="card-kovaq p-5">
-                <p class="text-xs font-bold uppercase tracking-wider text-kovaq-slate m-0">Conversión de Zona</p>
+            <div class="card-kpi p-5">
+                <p class="text-xs font-bold uppercase tracking-wider text-kovaq-slate m-0">Tasa de Toma</p>
                 <p id="stat-hist-conversion" class="text-3xl font-extrabold text-emerald-800 font-mono-num mt-2 mb-1">0.0%</p>
-                <div class="w-full bg-slate-200 rounded-full h-2 mt-2" role="progressbar" id="progress-live-conversion-bar" aria-label="Conversión de zona" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
-                    <div id="progress-live-conversion" class="bg-emerald-700 h-2 rounded-full" style="width: 0%;"></div>
+                <div class="w-full bg-slate-200 rounded-full h-2 mt-2" role="progressbar" id="progress-live-conversion-bar" aria-label="Tasa de toma de producto" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+                    <div id="progress-live-conversion" class="bg-emerald-700 h-2 rounded-full transition-[width] duration-300" style="width: 0%;"></div>
                 </div>
             </div>
         </div>
 
-        <!-- Resumen Ejecutivo de Publicidad, Productos Estrella y Comportamiento Visual -->
-        <div class="card-kovaq p-5 space-y-4">
+        <!-- Bloque Central: Conducta Frente a la Percha y Productos -->
+        <div class="card-kovaq p-5 space-y-5">
             <div class="flex flex-wrap items-center justify-between gap-2">
                 <div>
                     <h3 class="text-base sm:text-lg font-extrabold text-kovaq-navy font-title m-0">
-                        Comportamiento Visual y Efectividad de Publicidad POP
+                        Conducta Frente a la Percha y Desempeño de Productos
                     </h3>
                     <p id="exec-privacidad-resumen" class="text-xs text-kovaq-slate mt-0.5 mb-0">
-                        Cargando métricas consolidadas de coordenadas anónimas...
+                        Cargando métricas de interacción frente a góndola...
                     </p>
                 </div>
                 <span class="text-xs font-mono-num font-bold bg-slate-100 text-kovaq-navy px-3 py-1 rounded-lg" id="stat-live-sesion">
@@ -316,40 +431,58 @@
                 </span>
             </div>
 
+            <!-- 4 Patrones de decisión de compra frente al producto -->
             <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
                 <div class="bg-slate-50 border border-kovaq-border rounded-xl p-3.5">
-                    <span class="text-xs font-bold text-emerald-900 block">Miran promo y compran</span>
+                    <span class="text-xs font-bold text-emerald-900 block">Observan y llevan</span>
                     <span id="comp-mira-compra" class="text-2xl font-extrabold font-mono-num text-kovaq-navy block mt-1">0</span>
                     <span id="comp-mira-compra-dwell" class="text-xs text-kovaq-slate">0.0 s promedio</span>
                 </div>
                 <div class="bg-slate-50 border border-kovaq-border rounded-xl p-3.5">
-                    <span class="text-xs font-bold text-kovaq-navy block">Compran sin mirar (hábito)</span>
+                    <span class="text-xs font-bold text-kovaq-navy block">Toma directa (hábito)</span>
                     <span id="comp-no-mira-compra" class="text-2xl font-extrabold font-mono-num text-kovaq-navy block mt-1">0</span>
                     <span id="comp-no-mira-compra-dwell" class="text-xs text-kovaq-slate">0.0 s promedio</span>
                 </div>
                 <div class="bg-slate-50 border border-kovaq-border rounded-xl p-3.5">
-                    <span class="text-xs font-bold text-amber-900 block">Solo miran y siguen</span>
+                    <span class="text-xs font-bold text-amber-900 block">Solo revisan y siguen</span>
                     <span id="comp-solo-mira" class="text-2xl font-extrabold font-mono-num text-kovaq-navy block mt-1">0</span>
                     <span id="comp-solo-mira-dwell" class="text-xs text-kovaq-slate">0.0 s promedio</span>
                 </div>
                 <div class="bg-slate-50 border border-kovaq-border rounded-xl p-3.5">
-                    <span class="text-xs font-bold text-kovaq-orange block">Devolución último momento</span>
+                    <span class="text-xs font-bold text-kovaq-orange block">Devuelven al instante</span>
                     <span id="comp-devuelve" class="text-2xl font-extrabold font-mono-num text-kovaq-navy block mt-1">0</span>
                     <span id="comp-devuelve-dwell" class="text-xs text-kovaq-slate">0.0 s promedio</span>
                 </div>
             </div>
 
+            <!-- Foco principal: Productos más llevados vs Mayor indecisión -->
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                <div class="bg-emerald-50/60 border border-emerald-200 rounded-xl p-4">
+                    <h4 class="text-xs font-bold uppercase tracking-wider text-emerald-900 m-0 mb-2">
+                        Productos más llevados del período
+                    </h4>
+                    <ul id="lista-productos-llevados" class="space-y-1.5 text-xs text-kovaq-navy list-none p-0 m-0"></ul>
+                </div>
+                <div class="bg-amber-50/70 border border-amber-200 rounded-xl p-4">
+                    <h4 class="text-xs font-bold uppercase tracking-wider text-amber-900 m-0 mb-2">
+                        Mayor indecisión / cambio a último momento
+                    </h4>
+                    <ul id="lista-productos-indecision" class="space-y-1.5 text-xs text-kovaq-navy list-none p-0 m-0"></ul>
+                </div>
+            </div>
+
+            <!-- Actividad por percha y postura corporal -->
             <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
                 <div class="bg-orange-50/70 border border-orange-200 rounded-xl p-4">
-                    <h4 class="text-xs font-bold uppercase tracking-wider text-kovaq-orange m-0 mb-2">Zonas calientes</h4>
+                    <h4 class="text-xs font-bold uppercase tracking-wider text-kovaq-orange m-0 mb-2">Perchas más activas (calientes)</h4>
                     <ul id="lista-zonas-calientes" class="space-y-1.5 text-xs text-kovaq-navy list-none p-0 m-0"></ul>
                 </div>
                 <div class="bg-blue-50/70 border border-blue-200 rounded-xl p-4">
-                    <h4 class="text-xs font-bold uppercase tracking-wider text-blue-900 m-0 mb-2">Zonas frías (oportunidad POP)</h4>
+                    <h4 class="text-xs font-bold uppercase tracking-wider text-blue-900 m-0 mb-2">Perchas con baja rotación (frías)</h4>
                     <ul id="lista-zonas-frias" class="space-y-1.5 text-xs text-kovaq-navy list-none p-0 m-0"></ul>
                 </div>
                 <div class="bg-slate-50 border border-kovaq-border rounded-xl p-4">
-                    <h4 class="text-xs font-bold uppercase tracking-wider text-kovaq-navy m-0 mb-2">Postura de cabeza en percha</h4>
+                    <h4 class="text-xs font-bold uppercase tracking-wider text-kovaq-navy m-0 mb-2">Postura frente a la góndola</h4>
                     <div class="grid grid-cols-3 gap-2 text-center mt-2">
                         <div class="bg-white border border-kovaq-border rounded-lg p-2">
                             <span id="postura-giro" class="text-lg font-extrabold font-mono-num text-kovaq-navy block">0</span>
@@ -357,65 +490,69 @@
                         </div>
                         <div class="bg-white border border-kovaq-border rounded-lg p-2">
                             <span id="postura-sube" class="text-lg font-extrabold font-mono-num text-kovaq-navy block">0</span>
-                            <span class="text-[11px] text-kovaq-slate">Sube cabeza</span>
+                            <span class="text-[11px] text-kovaq-slate">Nivel alto</span>
                         </div>
                         <div class="bg-white border border-kovaq-border rounded-lg p-2">
                             <span id="postura-agacha" class="text-lg font-extrabold font-mono-num text-kovaq-navy block">0</span>
-                            <span class="text-[11px] text-kovaq-slate">Se agacha</span>
+                            <span class="text-[11px] text-kovaq-slate">Nivel bajo</span>
                         </div>
                     </div>
                 </div>
             </div>
-
-            <!-- Productos más llevados y mayor indecisión (ahora siempre visibles y vinculados al filtro) -->
-            <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                <div class="bg-emerald-50/60 border border-emerald-200 rounded-xl p-4">
-                    <h4 class="text-xs font-bold uppercase tracking-wider text-emerald-900 m-0 mb-2">Productos más llevados del período</h4>
-                    <ul id="lista-productos-llevados" class="space-y-1.5 text-xs text-kovaq-navy list-none p-0 m-0"></ul>
-                </div>
-                <div class="bg-amber-50/70 border border-amber-200 rounded-xl p-4">
-                    <h4 class="text-xs font-bold uppercase tracking-wider text-amber-900 m-0 mb-2">Mayor indecisión / cambio a último momento</h4>
-                    <ul id="lista-productos-indecision" class="space-y-1.5 text-xs text-kovaq-navy list-none p-0 m-0"></ul>
-                </div>
-            </div>
         </div>
 
-        <!-- Registro de continuidad multi-cámara y vectores en escena -->
-        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
-            <div class="card-kovaq p-5">
-                <h3 class="text-sm font-extrabold text-kovaq-navy font-title m-0 mb-3">
-                    Personas y vectores anónimos en tienda (tiempo real)
-                </h3>
-                <div id="lista-personas-reid" class="space-y-2 text-xs text-kovaq-slate">
-                    Esperando telemetría de vectores en el plano 2D...
+        <!-- Telemetría detallada colapsable para mantener la vista principal limpia -->
+        <details class="kovaq-disclosure">
+            <summary>
+                <div class="flex flex-wrap items-center gap-2">
+                    <i class="bi bi-people text-kovaq-orange" aria-hidden="true"></i>
+                    <span class="text-sm font-extrabold text-kovaq-navy font-title">
+                        Actividad en tiempo real: personas en tienda y traspasos entre cámaras
+                    </span>
+                    <span id="badge-resumen-reid" class="text-[11px] font-mono-num font-bold bg-slate-100 text-kovaq-slate px-2 py-0.5 rounded-md">
+                        0 en escena
+                    </span>
+                </div>
+                <i class="bi bi-chevron-down disclosure-chevron text-xs" aria-hidden="true"></i>
+            </summary>
+            <div class="disclosure-body pt-4 grid grid-cols-1 lg:grid-cols-2 gap-5 items-start">
+                <div>
+                    <h4 class="text-xs font-bold uppercase tracking-wider text-kovaq-slate m-0 mb-2.5">
+                        Vectores anónimos detectados
+                    </h4>
+                    <div id="lista-personas-reid" class="space-y-2 text-xs text-kovaq-slate">
+                        Esperando telemetría de vectores en el plano 2D...
+                    </div>
+                </div>
+                <div>
+                    <h4 class="text-xs font-bold uppercase tracking-wider text-kovaq-slate m-0 mb-2.5">
+                        Traspasos entre cámaras (Re-ID)
+                    </h4>
+                    <div id="lista-handoffs-reid" class="space-y-2 text-xs text-kovaq-slate">
+                        Aún no se registran traspasos entre cámaras en esta sesión.
+                    </div>
                 </div>
             </div>
-            <div class="card-kovaq p-5">
-                <h3 class="text-sm font-extrabold text-kovaq-navy font-title m-0 mb-3">
-                    Transiciones recientes entre cámaras (Handoff Re-ID)
-                </h3>
-                <div id="lista-handoffs-reid" class="space-y-2 text-xs text-kovaq-slate">
-                    Aún no se registran traspasos entre cámaras en esta sesión.
-                </div>
-            </div>
-        </div>
+        </details>
     </section>
 
-    <!-- Módulo 2: Analítica de percha y series históricas -->
-    <section id="tab-percha" role="tabpanel" aria-labelledby="btn-tab-percha" class="module-pane space-y-6">
+    <!-- ======================================================================= -->
+    <!-- MÓDULO 2: ANALÍTICA HISTÓRICA                                           -->
+    <!-- ======================================================================= -->
+    <section id="tab-percha" role="tabpanel" aria-labelledby="btn-tab-percha" class="module-pane space-y-5">
         <div class="card-kovaq p-5 flex flex-wrap items-center justify-between gap-4">
             <div>
                 <h2 class="text-lg sm:text-xl font-extrabold text-kovaq-navy font-title m-0">
-                    Evolución Histórica por Horas, Días, Semanas y Meses
+                    Evolución de Interacciones y Conducta por Período
                 </h2>
                 <p class="text-xs text-kovaq-slate mt-0.5 mb-0">
-                    Series generadas directamente desde la base histórica según sucursal, fechas y franja horaria activa.
+                    Compara visitas, tomas y devoluciones según sucursal, fechas con datos y franja horaria.
                 </p>
             </div>
             <div class="flex flex-wrap items-center gap-3">
                 <div class="flex items-center gap-2">
                     <label for="select-agrupacion-temporal" class="text-xs font-bold text-kovaq-navy">Agrupar por:</label>
-                    <select id="select-agrupacion-temporal" class="kovaq-select text-xs min-h-[38px]">
+                    <select id="select-agrupacion-temporal" class="kovaq-select text-xs min-h-[36px]">
                         <option value="hora">Por Horas</option>
                         <option value="dia">Por Días</option>
                         <option value="semana" selected>Por Semanas</option>
@@ -429,23 +566,21 @@
         </div>
 
         <div class="card-kovaq p-5">
-            <div class="flex items-center justify-between mb-3">
-                <h3 class="text-sm sm:text-base font-extrabold text-kovaq-navy font-title m-0">
-                    Tráfico, Tomas y Devoluciones agrupados por <span id="lbl-agrupacion-chart">Semana</span>
-                </h3>
-            </div>
+            <h3 class="text-sm sm:text-base font-extrabold text-kovaq-navy font-title m-0 mb-3">
+                Visitantes, Productos Tomados y Devoluciones por <span id="lbl-agrupacion-chart">Semana</span>
+            </h3>
             <div class="relative w-full h-64 sm:h-72">
-                <canvas id="chart-serie-temporal" width="800" height="280" role="img" aria-label="Gráfico de líneas con tráfico de clientes, productos tomados y devueltos en el período seleccionado."></canvas>
+                <canvas id="chart-serie-temporal" width="800" height="280" role="img" aria-label="Gráfico de líneas con visitantes, productos tomados y devueltos en el período seleccionado."></canvas>
             </div>
         </div>
 
-        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-5">
             <div class="lg:col-span-2 card-kovaq p-5">
                 <h3 class="text-sm sm:text-base font-extrabold text-kovaq-navy font-title m-0 mb-3">
-                    Curva de tráfico por hora del día (00:00 a 23:00)
+                    Curva de visitas por hora del día (00:00 a 23:00)
                 </h3>
                 <div class="relative w-full h-64">
-                    <canvas id="chart-heatmap-hora" width="600" height="250" role="img" aria-label="Gráfico de barras con tráfico de clientes distribuido por hora del día."></canvas>
+                    <canvas id="chart-heatmap-hora" width="600" height="250" role="img" aria-label="Gráfico de barras con tráfico distribuido por hora del día."></canvas>
                 </div>
             </div>
             <div class="card-kovaq p-5 flex flex-col justify-between gap-4">
@@ -453,7 +588,7 @@
                     Distribución por franja horaria
                 </h3>
                 <div class="relative w-full h-52">
-                    <canvas id="chart-franjas-donut" width="320" height="210" role="img" aria-label="Gráfico circular de participación porcentual de tráfico en mañana, tarde y noche."></canvas>
+                    <canvas id="chart-franjas-donut" width="320" height="210" role="img" aria-label="Gráfico circular de participación porcentual en mañana, tarde y noche."></canvas>
                 </div>
                 <div class="grid grid-cols-3 gap-2 text-center text-xs">
                     <div class="bg-slate-50 border border-kovaq-border rounded-lg p-2">
@@ -475,11 +610,11 @@
             </div>
         </div>
 
-        <!-- Perfiles de permanencia y Top productos del período -->
-        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
+        <!-- Perfiles de permanencia y Top productos -->
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-5 items-start">
             <div class="card-kovaq p-5 space-y-3">
                 <h3 class="text-sm sm:text-base font-extrabold text-kovaq-navy font-title m-0">
-                    Perfiles de permanencia frente a góndola
+                    Perfiles de permanencia frente a la percha
                 </h3>
                 <div id="lista-perfiles-permanencia" class="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
                     <p class="text-kovaq-slate m-0">Cargando perfiles de permanencia...</p>
@@ -487,9 +622,9 @@
             </div>
             <div class="card-kovaq p-5 space-y-3">
                 <h3 class="text-sm sm:text-base font-extrabold text-kovaq-navy font-title m-0">
-                    Top productos con mayor interacción en el período
+                    Top productos con mayor interacción
                 </h3>
-                <div id="lista-top-productos-analitica" class="space-y-2 text-xs">
+                <div id="lista-top-productos-analitica" class="space-y-2.5 text-xs">
                     <p class="text-kovaq-slate m-0">Cargando ranking de productos...</p>
                 </div>
             </div>
@@ -500,7 +635,7 @@
             <div class="flex flex-wrap items-center justify-between gap-3">
                 <div>
                     <h3 class="text-sm sm:text-base font-extrabold text-kovaq-navy font-title m-0">
-                        Matriz de tráfico semanal
+                        Matriz de visitas por día y horario
                     </h3>
                     <p class="text-xs text-kovaq-slate m-0">
                         Día pico: <strong id="insight-dia-pico">Sin datos</strong> (<span id="insight-dia-pico-val">0 visitas</span>) |
@@ -508,31 +643,35 @@
                     </p>
                 </div>
                 <div class="flex items-center gap-1.5" role="group" aria-label="Modo de vista de la matriz semanal">
-                    <button type="button" id="btn-vista-franjas" aria-pressed="true" class="btn-kovaq-outline min-h-[36px] text-xs bg-kovaq-navy text-white border-kovaq-navy">
+                    <button type="button" id="btn-vista-franjas" aria-pressed="true" class="btn-kovaq-outline min-h-[34px] text-xs bg-kovaq-navy text-white border-kovaq-navy">
                         Por franjas
                     </button>
-                    <button type="button" id="btn-vista-24h" aria-pressed="false" class="btn-kovaq-outline min-h-[36px] text-xs">
+                    <button type="button" id="btn-vista-24h" aria-pressed="false" class="btn-kovaq-outline min-h-[34px] text-xs">
                         Detallado 24h
                     </button>
                 </div>
             </div>
             <div id="heatmap-matriz-container" class="overflow-x-auto">
-                <p class="text-xs text-kovaq-slate">Cargando matriz de tráfico semanal...</p>
+                <p class="text-xs text-kovaq-slate">Cargando matriz semanal...</p>
             </div>
         </div>
 
-        <!-- Auditoría en tiempo real de eventos de sesión -->
-        <div class="card-kovaq p-5">
-            <div class="flex flex-wrap items-center justify-between gap-2 mb-3">
-                <h3 class="text-sm sm:text-base font-extrabold text-kovaq-navy font-title m-0">
-                    Auditoría en vivo de tomas y devoluciones (últimos 50 eventos)
-                </h3>
-                <span class="text-xs font-mono-num text-kovaq-slate">
-                    Sesión viva: <strong id="stat-sesion-tomados" class="text-kovaq-navy">0</strong> tomas /
-                    <strong id="stat-sesion-devueltos" class="text-kovaq-navy">0</strong> devueltos
-                </span>
-            </div>
-            <div class="overflow-x-auto">
+        <!-- Registro detallado de eventos colapsable para evitar ruido visual -->
+        <details class="kovaq-disclosure">
+            <summary>
+                <div class="flex flex-wrap items-center gap-2">
+                    <i class="bi bi-list-check text-kovaq-orange" aria-hidden="true"></i>
+                    <span class="text-sm font-extrabold text-kovaq-navy font-title">
+                        Registro en vivo de tomas y devoluciones (últimos 50 eventos)
+                    </span>
+                    <span class="text-xs font-mono-num text-kovaq-slate">
+                        (<strong id="stat-sesion-tomados" class="text-kovaq-navy">0</strong> tomas /
+                        <strong id="stat-sesion-devueltos" class="text-kovaq-navy">0</strong> devueltos)
+                    </span>
+                </div>
+                <i class="bi bi-chevron-down disclosure-chevron text-xs" aria-hidden="true"></i>
+            </summary>
+            <div class="disclosure-body pt-3 overflow-x-auto">
                 <table class="w-full text-left border-collapse text-xs">
                     <caption class="sr-only">Registro cronológico de eventos en vivo</caption>
                     <thead class="bg-slate-100 border-b border-kovaq-border text-kovaq-navy font-bold uppercase">
@@ -547,49 +686,53 @@
                     <tbody id="yolo-event-log-body" class="divide-y divide-kovaq-border text-kovaq-navy">
                         <tr id="row-empty-audit">
                             <td colspan="5" class="p-4 text-center text-kovaq-slate">
-                                Esperando eventos de la sesión actual. Reproduce el video, sube un archivo o activa la simulación 2D.
+                                Esperando eventos de la sesión actual. Reproduce el video o sube un archivo para registrar tomas en vivo.
                             </td>
                         </tr>
                     </tbody>
                 </table>
             </div>
-        </div>
+        </details>
     </section>
 
-    <!-- Módulo 3: Inventario y planograma -->
-    <section id="tab-inventario" role="tabpanel" aria-labelledby="btn-tab-inventario" class="module-pane space-y-6">
+    <!-- ======================================================================= -->
+    <!-- MÓDULO 3: PRODUCTOS Y ROTACIÓN EN PERCHA                                -->
+    <!-- ======================================================================= -->
+    <section id="tab-inventario" role="tabpanel" aria-labelledby="btn-tab-inventario" class="module-pane space-y-5">
         <div class="card-kovaq p-5 space-y-4">
             <div class="flex flex-wrap items-center justify-between gap-3">
                 <div>
                     <h2 class="text-lg sm:text-xl font-extrabold text-kovaq-navy font-title m-0">
-                        Inventario y Rotación por Percha
+                        Catálogo de Productos y Conducta por Percha
                     </h2>
                     <p id="inventario-count-label" role="status" aria-live="polite" class="text-xs text-kovaq-slate mt-0.5 mb-0">
-                        Cargando catálogo desde Turso...
+                        Cargando catálogo de productos...
                     </p>
                 </div>
-                <div class="w-full sm:w-72">
-                    <label for="input-buscar-inventario" class="sr-only">Buscar producto, categoría o código de percha</label>
-                    <input type="search" id="input-buscar-inventario" placeholder="Buscar producto o percha (ej. PER-A1)..." class="kovaq-input w-full text-xs">
+                <div class="flex flex-wrap items-center gap-2 w-full sm:w-auto">
+                    <label for="select-categoria-productos" class="sr-only">Filtrar por categoría</label>
+                    <select id="select-categoria-productos" class="kovaq-select text-xs min-h-[38px]">
+                        <option value="Todas">Todas las categorías</option>
+                        <option value="Cereales">Cereales</option>
+                        <option value="Conservas">Conservas</option>
+                        <option value="Bebidas">Bebidas</option>
+                        <option value="Lácteos">Lácteos</option>
+                        <option value="Snacks">Snacks</option>
+                        <option value="Limpieza">Limpieza</option>
+                    </select>
+                    <div class="flex-1 sm:w-64">
+                        <label for="input-buscar-inventario" class="sr-only">Buscar producto, categoría o código de percha</label>
+                        <input type="search" id="input-buscar-inventario" placeholder="Buscar producto o percha (ej. PER-A1)..." class="kovaq-input w-full text-xs">
+                    </div>
                 </div>
-            </div>
-
-            <div class="flex flex-wrap items-center gap-2" role="group" aria-label="Filtrar inventario por categoría">
-                <button type="button" data-cat="Todas" aria-pressed="true" class="category-tag-btn active">Todas</button>
-                <button type="button" data-cat="Cereales" aria-pressed="false" class="category-tag-btn">Cereales</button>
-                <button type="button" data-cat="Conservas" aria-pressed="false" class="category-tag-btn">Conservas</button>
-                <button type="button" data-cat="Bebidas" aria-pressed="false" class="category-tag-btn">Bebidas</button>
-                <button type="button" data-cat="Lácteos" aria-pressed="false" class="category-tag-btn">Lácteos</button>
-                <button type="button" data-cat="Snacks" aria-pressed="false" class="category-tag-btn">Snacks</button>
-                <button type="button" data-cat="Limpieza" aria-pressed="false" class="category-tag-btn">Limpieza</button>
             </div>
 
             <div class="overflow-x-auto">
                 <table class="w-full text-left border-collapse text-xs">
-                    <caption class="sr-only">Catálogo de productos con tomas, devoluciones y stock por percha</caption>
+                    <caption class="sr-only">Catálogo de productos con tomas, devoluciones y estado por percha</caption>
                     <thead class="bg-slate-100 border-b border-kovaq-border text-kovaq-navy font-bold uppercase">
                         <tr>
-                            <th scope="col" class="p-3">Producto y Ubicación</th>
+                            <th scope="col" class="p-3">Producto y Nivel en Percha</th>
                             <th scope="col" class="p-3">Categoría</th>
                             <th scope="col" class="p-3">Stock</th>
                             <th scope="col" class="p-3">Tomas / Devueltos</th>
@@ -608,197 +751,300 @@
         </div>
     </section>
 
-    <!-- Módulo 4: Marketing, promociones POP y Kovaq AI -->
-    <section id="tab-marketing" role="tabpanel" aria-labelledby="btn-tab-marketing" class="module-pane space-y-6">
-        <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
-            <div class="lg:col-span-7 card-kovaq p-5 space-y-4">
-                <div>
-                    <h2 class="text-lg sm:text-xl font-extrabold text-kovaq-navy font-title m-0">
-                        Evaluación de Promociones POP Activas
-                    </h2>
-                    <p id="motor-ai-resumen-texto" class="text-xs text-kovaq-slate mt-1 mb-0">
-                        Analizando rendimiento de promociones frente a tomas y devoluciones del período...
-                    </p>
-                </div>
-
-                <div class="overflow-x-auto">
-                    <table class="w-full text-left border-collapse text-xs">
-                        <caption class="sr-only">Rendimiento de promociones activas en percha</caption>
-                        <thead class="bg-slate-100 border-b border-kovaq-border text-kovaq-navy font-bold uppercase">
-                            <tr>
-                                <th scope="col" class="p-3">Percha y Promoción</th>
-                                <th scope="col" class="p-3">Tomas / Dev.</th>
-                                <th scope="col" class="p-3">Retención</th>
-                                <th scope="col" class="p-3">Diagnóstico</th>
-                            </tr>
-                        </thead>
-                        <tbody id="tabla-eval-promos-body" class="divide-y divide-kovaq-border text-kovaq-navy">
-                            <tr>
-                                <td colspan="4" class="p-6 text-center text-kovaq-slate">Cargando evaluación de promociones...</td>
-                            </tr>
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-
-            <div class="lg:col-span-5 card-kovaq p-5 flex flex-col justify-between gap-4">
+    <!-- ======================================================================= -->
+    <!-- MÓDULO 4: ASISTENTE IA (Productos primero; Promociones como adicional)  -->
+    <!-- ======================================================================= -->
+    <section id="tab-marketing" role="tabpanel" aria-labelledby="btn-tab-marketing" class="module-pane space-y-5">
+        <div class="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
+            <!-- Asistente IA principal enfocado en productos y conducta -->
+            <div class="lg:col-span-7 card-kovaq p-5 flex flex-col justify-between gap-4">
                 <div class="flex flex-wrap items-center justify-between gap-2">
-                    <h2 class="text-base sm:text-lg font-extrabold text-kovaq-navy font-title m-0">
-                        Kovaq Marketing AI
-                    </h2>
+                    <div>
+                        <h2 class="text-base sm:text-lg font-extrabold text-kovaq-navy font-title m-0">
+                            Asistente IA de Productos y Perchas
+                        </h2>
+                        <p class="text-xs text-kovaq-slate mt-0.5 mb-0">
+                            Consulta sobre rotación de productos, indecisión, alturas de percha y zonas frías.
+                        </p>
+                    </div>
                     <div class="flex items-center gap-2">
-                        <label for="chat-modo" class="text-xs font-bold text-kovaq-navy">Modo</label>
+                        <label for="chat-modo" class="text-xs font-bold text-kovaq-navy">Enfoque</label>
                         <select id="chat-modo" class="kovaq-select text-xs min-h-[36px]">
-                            <option value="publicidad">Publicidad POP</option>
-                            <option value="estrategia">Estrategia</option>
+                            <option value="estrategia" selected>Productos y Perchas</option>
                             <option value="datos">Datos Puros</option>
+                            <option value="publicidad">Promociones (Opcional)</option>
                         </select>
                     </div>
                 </div>
 
                 <div id="chat-messages" role="log" aria-live="polite" aria-relevant="additions" class="h-72 overflow-y-auto bg-slate-50 border border-kovaq-border rounded-xl p-3 space-y-3">
                     <div class="p-3 rounded-xl text-xs bg-white border border-kovaq-border text-kovaq-navy max-w-[90%]">
-                        <strong class="font-title block mb-1 text-kovaq-orange">Kovaq Marketing AI</strong>
-                        <span>Consulta sobre zonas calientes, devoluciones a último momento o efectividad de tus promociones en la sucursal seleccionada.</span>
+                        <strong class="font-title block mb-1 text-kovaq-orange">Kovaq IA</strong>
+                        <span>Pregúntame qué productos se llevan más, dónde ocurre mayor indecisión o cómo mejorar el acomodo en cada nivel de percha.</span>
                     </div>
                 </div>
 
                 <div class="flex flex-wrap gap-2">
-                    <button type="button" data-prompt="¿Qué zonas están calientes y qué zonas están frías?" class="btn-chat-quick btn-kovaq-outline min-h-[36px] text-xs">
-                        Zonas calientes y frías
+                    <button type="button" data-prompt="¿Qué productos generan más indecisión o devoluciones a último momento?" class="btn-chat-quick btn-kovaq-outline min-h-[34px] text-xs">
+                        Indecisión en productos
                     </button>
-                    <button type="button" data-prompt="¿Por qué devuelven productos a último momento?" class="btn-chat-quick btn-kovaq-outline min-h-[36px] text-xs">
-                        Cambios último momento
+                    <button type="button" data-prompt="¿Qué perchas están calientes y qué perchas están frías?" class="btn-chat-quick btn-kovaq-outline min-h-[34px] text-xs">
+                        Perchas calientes y frías
                     </button>
-                    <button type="button" data-prompt="¿Qué promociones funcionan mejor hoy?" class="btn-chat-quick btn-kovaq-outline min-h-[36px] text-xs">
-                        Efectividad POP
+                    <button type="button" data-prompt="¿Qué productos se llevan más y en qué nivel de percha funcionan mejor?" class="btn-chat-quick btn-kovaq-outline min-h-[34px] text-xs">
+                        Mejores productos
                     </button>
                 </div>
 
                 <form id="chat-form" class="flex gap-2">
-                    <label for="chat-input" class="sr-only">Escribe tu consulta para Kovaq Marketing AI</label>
-                    <input type="text" id="chat-input" maxlength="600" placeholder="Pregunta sobre perchas o promociones..." class="kovaq-input flex-1 text-xs" required>
-                    <button type="submit" id="chat-submit" class="btn-kovaq-primary min-w-[44px] min-h-[44px] px-4" aria-label="Enviar consulta a Kovaq IA">
+                    <label for="chat-input" class="sr-only">Escribe tu consulta para Kovaq IA</label>
+                    <input type="text" id="chat-input" maxlength="600" placeholder="Pregunta sobre productos, niveles de percha o conducta..." class="kovaq-input flex-1 text-xs" required>
+                    <button type="submit" id="chat-submit" class="btn-kovaq-primary min-w-[44px] min-h-[42px] px-4" aria-label="Enviar consulta a Kovaq IA">
                         <i class="bi bi-send-fill" aria-hidden="true"></i>
                     </button>
                 </form>
             </div>
+
+            <!-- Módulo adicional opcional: Evaluación de Promociones y Stands POP -->
+            <div class="lg:col-span-5">
+                <details class="kovaq-disclosure" open>
+                    <summary>
+                        <div>
+                            <span class="text-[10px] font-bold uppercase tracking-wider text-kovaq-slate block">Módulo adicional opcional</span>
+                            <span class="text-sm font-extrabold text-kovaq-navy font-title">
+                                Seguimiento de Promociones y Stands
+                            </span>
+                        </div>
+                        <i class="bi bi-chevron-down disclosure-chevron text-xs" aria-hidden="true"></i>
+                    </summary>
+                    <div class="disclosure-body pt-3 space-y-3">
+                        <p id="motor-ai-resumen-texto" class="text-xs text-kovaq-slate m-0">
+                            Las promociones y stands POP son opcionales y se configuran aparte en la pestaña Configuración.
+                        </p>
+                        <div class="overflow-x-auto">
+                            <table class="w-full text-left border-collapse text-xs">
+                                <caption class="sr-only">Rendimiento opcional de promociones o stands configurados</caption>
+                                <thead class="bg-slate-100 border-b border-kovaq-border text-kovaq-navy font-bold uppercase">
+                                    <tr>
+                                        <th scope="col" class="p-2.5">Percha / Campaña</th>
+                                        <th scope="col" class="p-2.5">Tomas</th>
+                                        <th scope="col" class="p-2.5">Retención</th>
+                                        <th scope="col" class="p-2.5">Estado</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="tabla-eval-promos-body" class="divide-y divide-kovaq-border text-kovaq-navy">
+                                    <tr>
+                                        <td colspan="4" class="p-4 text-center text-kovaq-slate">Cargando...</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </details>
+            </div>
         </div>
     </section>
 
-    <!-- Módulo 5: Configuración (sucursales, cámaras, planograma, promociones y datos de simulación) -->
-    <section id="tab-config" role="tabpanel" aria-labelledby="btn-tab-config" class="module-pane space-y-6">
+    <!-- ======================================================================= -->
+    <!-- MÓDULO 5: CONFIGURACIÓN (Menús desplegables ordenados por prioridad)    -->
+    <!-- ======================================================================= -->
+    <section id="tab-config" role="tabpanel" aria-labelledby="btn-tab-config" class="module-pane space-y-4">
         <div id="config-feedback-banner" role="status" aria-live="polite" class="hidden text-xs font-semibold px-4 py-2.5 rounded-xl border"></div>
 
-        <!-- Gestión de Sucursales Retail + Simulación -->
-        <div class="card-kovaq p-5 space-y-4">
-            <div class="flex flex-wrap items-center justify-between gap-3">
-                <div>
-                    <h2 class="text-base sm:text-lg font-extrabold text-kovaq-navy font-title m-0">
-                        Sucursales Retail y Datos de Simulación
-                    </h2>
-                    <p class="text-xs text-kovaq-slate m-0">Administra los locales de tu cadena o regenera datos de demostración por horas y días.</p>
+        <!-- 1. Planograma de Productos por Percha (abierto por defecto: núcleo del sistema) -->
+        <details class="kovaq-disclosure" open>
+            <summary>
+                <div class="flex flex-wrap items-center gap-2">
+                    <i class="bi bi-grid-3x3-gap text-kovaq-orange" aria-hidden="true"></i>
+                    <span class="text-base font-extrabold text-kovaq-navy font-title">
+                        Planograma de Productos por Percha (Superior / Ojos / Inferior)
+                    </span>
+                    <span id="config-perchas-count" class="text-xs font-mono-num font-bold bg-slate-100 text-kovaq-slate px-2 py-0.5 rounded-md">0 perchas</span>
                 </div>
-                <button type="button" id="btn-regenerar-simulacion" class="btn-kovaq-outline text-xs min-h-[38px]">
-                    <i class="bi bi-arrow-repeat" aria-hidden="true"></i>
-                    <span>Regenerar datos de simulación</span>
-                </button>
-            </div>
-
-            <form id="form-nueva-sucursal" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 bg-slate-50 border border-kovaq-border p-4 rounded-xl">
-                <div>
-                    <label for="suc-id" class="block text-xs font-bold text-kovaq-navy mb-1">Código</label>
-                    <input type="text" id="suc-id" placeholder="Ej. SUC-VALLE" class="kovaq-input w-full text-xs font-mono-num">
-                </div>
-                <div>
-                    <label for="suc-nombre" class="block text-xs font-bold text-kovaq-navy mb-1">Nombre sucursal</label>
-                    <input type="text" id="suc-nombre" required placeholder="Ej. Cumbayá Scala" class="kovaq-input w-full text-xs">
-                </div>
-                <div>
-                    <label for="suc-ciudad" class="block text-xs font-bold text-kovaq-navy mb-1">Ciudad</label>
-                    <input type="text" id="suc-ciudad" required value="Quito" class="kovaq-input w-full text-xs">
-                </div>
-                <div>
-                    <label for="suc-formato" class="block text-xs font-bold text-kovaq-navy mb-1">Formato</label>
-                    <select id="suc-formato" class="kovaq-select w-full text-xs">
-                        <option value="Hipermercado">Hipermercado</option>
-                        <option value="Supermercado">Supermercado</option>
-                        <option value="Supermercado Express">Supermercado Express</option>
-                    </select>
-                </div>
-                <div class="flex items-end">
-                    <button type="submit" class="btn-kovaq-primary w-full text-xs min-h-[40px]">Agregar sucursal</button>
-                </div>
-            </form>
-
-            <div class="overflow-x-auto">
-                <table class="w-full text-left border-collapse text-xs">
-                    <caption class="sr-only">Sucursales registradas en el sistema</caption>
-                    <thead class="bg-slate-100 border-b border-kovaq-border text-kovaq-navy font-bold uppercase">
-                        <tr>
-                            <th scope="col" class="p-2.5">Código</th>
-                            <th scope="col" class="p-2.5">Sucursal</th>
-                            <th scope="col" class="p-2.5">Ciudad</th>
-                            <th scope="col" class="p-2.5">Formato</th>
-                            <th scope="col" class="p-2.5">Área</th>
-                        </tr>
-                    </thead>
-                    <tbody id="tabla-sucursales-body" class="divide-y divide-kovaq-border text-kovaq-navy"></tbody>
-                </table>
-            </div>
-        </div>
-
-        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
-            <!-- Formulario de Cámaras -->
-            <div class="card-kovaq p-5 space-y-4">
-                <div class="flex items-center justify-between">
-                    <h2 class="text-base sm:text-lg font-extrabold text-kovaq-navy font-title m-0">Cámaras en Plano 2D</h2>
-                    <span id="config-camaras-count" class="text-xs font-mono-num font-bold text-kovaq-slate">0 dispositivos</span>
-                </div>
-
-                <form id="form-nueva-camara" class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    <div class="sm:col-span-2">
-                        <label for="cam-nombre" class="block text-xs font-bold text-kovaq-navy mb-1">Nombre de cámara</label>
-                        <input type="text" id="cam-nombre" required placeholder="Ej. Pasillo Central Norte" class="kovaq-input w-full text-xs">
+                <i class="bi bi-chevron-down disclosure-chevron text-xs" aria-hidden="true"></i>
+            </summary>
+            <div class="disclosure-body pt-4 space-y-4">
+                <form id="form-planograma-percha" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 bg-slate-50 border border-kovaq-border p-4 rounded-xl">
+                    <div>
+                        <label for="plano-id" class="block text-xs font-bold text-kovaq-navy mb-1">Código de percha</label>
+                        <input type="text" id="plano-id" required placeholder="Ej. PER-D1" class="kovaq-input w-full text-xs font-mono-num">
                     </div>
                     <div>
-                        <label for="cam-url" class="block text-xs font-bold text-kovaq-navy mb-1">URL RTSP o índice USB</label>
-                        <input type="text" id="cam-url" required placeholder="rtsp://192.168.1.50:554/live o 0" class="kovaq-input w-full text-xs font-mono-num">
+                        <label for="plano-nombre" class="block text-xs font-bold text-kovaq-navy mb-1">Nombre de percha</label>
+                        <input type="text" id="plano-nombre" required placeholder="Ej. Percha D1 • Café" class="kovaq-input w-full text-xs">
                     </div>
                     <div>
-                        <label for="cam-estado" class="block text-xs font-bold text-kovaq-navy mb-1">Estado inicial</label>
-                        <select id="cam-estado" class="kovaq-select w-full text-xs">
-                            <option value="Activa">Activa</option>
-                            <option value="Pausada">Pausada</option>
+                        <label for="plano-cat" class="block text-xs font-bold text-kovaq-navy mb-1">Categoría</label>
+                        <input type="text" id="plano-cat" required placeholder="Ej. Bebidas" class="kovaq-input w-full text-xs">
+                    </div>
+                    <div>
+                        <label for="plano-cam" class="block text-xs font-bold text-kovaq-navy mb-1">Cámara asignada</label>
+                        <select id="plano-cam" class="kovaq-select w-full text-xs">
+                            <option value="CAM-01">CAM-01</option>
+                            <option value="CAM-02">CAM-02</option>
+                            <option value="CAM-03">CAM-03</option>
                         </select>
                     </div>
-                    <div class="sm:col-span-2">
-                        <button type="submit" class="btn-kovaq-primary text-xs min-h-[42px]">Registrar cámara</button>
+                    <div>
+                        <label for="plano-prod-sup" class="block text-xs font-bold text-kovaq-navy mb-1">Nivel Superior</label>
+                        <input type="text" id="plano-prod-sup" required placeholder="Producto nivel alto" class="kovaq-input w-full text-xs">
+                    </div>
+                    <div>
+                        <label for="plano-prod-med" class="block text-xs font-bold text-kovaq-navy mb-1">Nivel Medio (Ojos)</label>
+                        <input type="text" id="plano-prod-med" required placeholder="Producto nivel ojos" class="kovaq-input w-full text-xs">
+                    </div>
+                    <div>
+                        <label for="plano-prod-inf" class="block text-xs font-bold text-kovaq-navy mb-1">Nivel Inferior</label>
+                        <input type="text" id="plano-prod-inf" required placeholder="Producto nivel bajo" class="kovaq-input w-full text-xs">
+                    </div>
+                    <div class="flex items-end">
+                        <button type="submit" class="btn-kovaq-primary w-full text-xs min-h-[40px]">Guardar planograma</button>
                     </div>
                 </form>
 
                 <div class="overflow-x-auto">
                     <table class="w-full text-left border-collapse text-xs">
-                        <caption class="sr-only">Cámaras registradas en el plano</caption>
+                        <caption class="sr-only">Perchas configuradas con sus productos por nivel</caption>
                         <thead class="bg-slate-100 border-b border-kovaq-border text-kovaq-navy font-bold uppercase">
                             <tr>
-                                <th scope="col" class="p-2.5">Cámara</th>
-                                <th scope="col" class="p-2.5">Ruta</th>
-                                <th scope="col" class="p-2.5">Estado</th>
-                                <th scope="col" class="p-2.5 text-right">Acción</th>
+                                <th scope="col" class="p-2.5">Código</th>
+                                <th scope="col" class="p-2.5">Percha</th>
+                                <th scope="col" class="p-2.5">Productos por nivel</th>
+                                <th scope="col" class="p-2.5">Extras POP</th>
+                                <th scope="col" class="p-2.5">Actividad</th>
                             </tr>
                         </thead>
-                        <tbody id="tabla-camaras-body" class="divide-y divide-kovaq-border text-kovaq-navy"></tbody>
+                        <tbody id="tabla-perchas-config-body" class="divide-y divide-kovaq-border text-kovaq-navy"></tbody>
                     </table>
                 </div>
             </div>
+        </details>
 
-            <!-- Formulario de Promociones POP -->
-            <div class="card-kovaq p-5 space-y-4">
-                <h2 class="text-base sm:text-lg font-extrabold text-kovaq-navy font-title m-0">
-                    Registrar Promoción o Publicidad POP
-                </h2>
-                <form id="form-nueva-promo" class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <!-- 2. Sucursales, Cámaras y Datos de Simulación (desplegable) -->
+        <details class="kovaq-disclosure">
+            <summary>
+                <div class="flex flex-wrap items-center gap-2">
+                    <i class="bi bi-building text-kovaq-orange" aria-hidden="true"></i>
+                    <span class="text-base font-extrabold text-kovaq-navy font-title">
+                        Sucursales, Cámaras en Plano 2D y Simulación
+                    </span>
+                    <span id="config-camaras-count" class="text-xs font-mono-num font-bold bg-slate-100 text-kovaq-slate px-2 py-0.5 rounded-md">0 dispositivos</span>
+                </div>
+                <i class="bi bi-chevron-down disclosure-chevron text-xs" aria-hidden="true"></i>
+            </summary>
+            <div class="disclosure-body pt-4 space-y-5">
+                <div class="flex flex-wrap items-center justify-between gap-3">
+                    <p class="text-xs text-kovaq-slate m-0">
+                        Administra los locales de la cadena, sus cámaras en planta o regenera datos de demostración.
+                    </p>
+                    <button type="button" id="btn-regenerar-simulacion" class="btn-kovaq-outline text-xs min-h-[36px]">
+                        <i class="bi bi-arrow-repeat" aria-hidden="true"></i>
+                        <span>Regenerar datos de simulación</span>
+                    </button>
+                </div>
+
+                <form id="form-nueva-sucursal" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 bg-slate-50 border border-kovaq-border p-4 rounded-xl">
+                    <div>
+                        <label for="suc-id" class="block text-xs font-bold text-kovaq-navy mb-1">Código</label>
+                        <input type="text" id="suc-id" placeholder="Ej. SUC-VALLE" class="kovaq-input w-full text-xs font-mono-num">
+                    </div>
+                    <div>
+                        <label for="suc-nombre" class="block text-xs font-bold text-kovaq-navy mb-1">Nombre sucursal</label>
+                        <input type="text" id="suc-nombre" required placeholder="Ej. Cumbayá Scala" class="kovaq-input w-full text-xs">
+                    </div>
+                    <div>
+                        <label for="suc-ciudad" class="block text-xs font-bold text-kovaq-navy mb-1">Ciudad</label>
+                        <input type="text" id="suc-ciudad" required value="Quito" class="kovaq-input w-full text-xs">
+                    </div>
+                    <div>
+                        <label for="suc-formato" class="block text-xs font-bold text-kovaq-navy mb-1">Formato</label>
+                        <select id="suc-formato" class="kovaq-select w-full text-xs">
+                            <option value="Hipermercado">Hipermercado</option>
+                            <option value="Supermercado">Supermercado</option>
+                            <option value="Supermercado Express">Supermercado Express</option>
+                        </select>
+                    </div>
+                    <div class="flex items-end">
+                        <button type="submit" class="btn-kovaq-primary w-full text-xs min-h-[38px]">Agregar sucursal</button>
+                    </div>
+                </form>
+
+                <div class="grid grid-cols-1 lg:grid-cols-2 gap-5 items-start">
+                    <div class="overflow-x-auto">
+                        <h3 class="text-xs font-bold uppercase tracking-wider text-kovaq-slate m-0 mb-2">Sucursales registradas</h3>
+                        <table class="w-full text-left border-collapse text-xs">
+                            <caption class="sr-only">Sucursales registradas en el sistema</caption>
+                            <thead class="bg-slate-100 border-b border-kovaq-border text-kovaq-navy font-bold uppercase">
+                                <tr>
+                                    <th scope="col" class="p-2.5">Código</th>
+                                    <th scope="col" class="p-2.5">Sucursal</th>
+                                    <th scope="col" class="p-2.5">Ciudad</th>
+                                    <th scope="col" class="p-2.5">Formato</th>
+                                    <th scope="col" class="p-2.5">Área</th>
+                                </tr>
+                            </thead>
+                            <tbody id="tabla-sucursales-body" class="divide-y divide-kovaq-border text-kovaq-navy"></tbody>
+                        </table>
+                    </div>
+
+                    <div class="space-y-3">
+                        <h3 class="text-xs font-bold uppercase tracking-wider text-kovaq-slate m-0">Cámaras en plano 2D</h3>
+                        <form id="form-nueva-camara" class="grid grid-cols-1 sm:grid-cols-2 gap-2.5 bg-slate-50 border border-kovaq-border p-3.5 rounded-xl">
+                            <div class="sm:col-span-2">
+                                <label for="cam-nombre" class="block text-xs font-bold text-kovaq-navy mb-1">Nombre de cámara</label>
+                                <input type="text" id="cam-nombre" required placeholder="Ej. Pasillo Central Norte" class="kovaq-input w-full text-xs">
+                            </div>
+                            <div>
+                                <label for="cam-url" class="block text-xs font-bold text-kovaq-navy mb-1">URL RTSP o USB</label>
+                                <input type="text" id="cam-url" required placeholder="rtsp://192.168.1.50/live o 0" class="kovaq-input w-full text-xs font-mono-num">
+                            </div>
+                            <div>
+                                <label for="cam-estado" class="block text-xs font-bold text-kovaq-navy mb-1">Estado</label>
+                                <select id="cam-estado" class="kovaq-select w-full text-xs">
+                                    <option value="Activa">Activa</option>
+                                    <option value="Pausada">Pausada</option>
+                                </select>
+                            </div>
+                            <div class="sm:col-span-2">
+                                <button type="submit" class="btn-kovaq-primary text-xs min-h-[38px]">Registrar cámara</button>
+                            </div>
+                        </form>
+                        <div class="overflow-x-auto">
+                            <table class="w-full text-left border-collapse text-xs">
+                                <caption class="sr-only">Cámaras registradas en el plano</caption>
+                                <thead class="bg-slate-100 border-b border-kovaq-border text-kovaq-navy font-bold uppercase">
+                                    <tr>
+                                        <th scope="col" class="p-2.5">Cámara</th>
+                                        <th scope="col" class="p-2.5">Ruta</th>
+                                        <th scope="col" class="p-2.5">Estado</th>
+                                        <th scope="col" class="p-2.5 text-right">Acción</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="tabla-camaras-body" class="divide-y divide-kovaq-border text-kovaq-navy"></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </details>
+
+        <!-- 3. Adicional opcional: Promociones y Stands POP (cerrado por defecto) -->
+        <details class="kovaq-disclosure">
+            <summary>
+                <div class="flex flex-wrap items-center gap-2">
+                    <i class="bi bi-tag text-kovaq-slate" aria-hidden="true"></i>
+                    <span class="text-base font-extrabold text-kovaq-navy font-title">
+                        Adicional opcional: Promociones, Cenefas y Stands POP
+                    </span>
+                    <span class="text-[11px] font-semibold bg-slate-100 text-kovaq-slate px-2 py-0.5 rounded-md">Opcional</span>
+                </div>
+                <i class="bi bi-chevron-down disclosure-chevron text-xs" aria-hidden="true"></i>
+            </summary>
+            <div class="disclosure-body pt-4 space-y-3">
+                <p class="text-xs text-kovaq-slate m-0">
+                    Si deseas medir campañas puntuales o stands promocionales aparte del análisis principal de productos, regístralos aquí.
+                </p>
+                <form id="form-nueva-promo" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 bg-slate-50 border border-kovaq-border p-4 rounded-xl">
                     <div>
                         <label for="promo-percha" class="block text-xs font-bold text-kovaq-navy mb-1">Percha destino</label>
                         <select id="promo-percha" class="kovaq-select w-full text-xs">
@@ -810,91 +1056,27 @@
                         </select>
                     </div>
                     <div>
-                        <label for="promo-producto" class="block text-xs font-bold text-kovaq-navy mb-1">Producto promocionado</label>
+                        <label for="promo-producto" class="block text-xs font-bold text-kovaq-navy mb-1">Producto o stand</label>
                         <input type="text" id="promo-producto" required placeholder="Ej. Salsa de Tomate Artesanal" class="kovaq-input w-full text-xs">
                     </div>
-                    <div class="sm:col-span-2">
-                        <label for="promo-titulo" class="block text-xs font-bold text-kovaq-navy mb-1">Título de la campaña POP</label>
-                        <input type="text" id="promo-titulo" required placeholder="Ej. 2x1 Fin de Semana en Nivel Ojos" class="kovaq-input w-full text-xs">
+                    <div>
+                        <label for="promo-titulo" class="block text-xs font-bold text-kovaq-navy mb-1">Nombre de la campaña</label>
+                        <input type="text" id="promo-titulo" required placeholder="Ej. 2x1 Fin de Semana" class="kovaq-input w-full text-xs">
                     </div>
                     <div>
-                        <label for="promo-tipo" class="block text-xs font-bold text-kovaq-navy mb-1">Tipo de material POP</label>
-                        <input type="text" id="promo-tipo" required value="Cenefa / Stopper POP" class="kovaq-input w-full text-xs">
+                        <label for="promo-tipo" class="block text-xs font-bold text-kovaq-navy mb-1">Formato</label>
+                        <input type="text" id="promo-tipo" required value="Stand / Cenefa POP" class="kovaq-input w-full text-xs">
                     </div>
                     <div>
                         <label for="promo-desc" class="block text-xs font-bold text-kovaq-navy mb-1">Descuento (%)</label>
                         <input type="number" id="promo-desc" min="0" max="100" value="15" class="kovaq-input w-full text-xs font-mono-num">
                     </div>
-                    <div class="sm:col-span-2">
-                        <button type="submit" class="btn-kovaq-primary text-xs min-h-[42px]">Guardar promoción POP</button>
+                    <div class="flex items-end">
+                        <button type="submit" class="btn-kovaq-primary w-full text-xs min-h-[38px]">Guardar promoción</button>
                     </div>
                 </form>
             </div>
-        </div>
-
-        <!-- Planograma por Niveles de Percha -->
-        <div class="card-kovaq p-5 space-y-4">
-            <div class="flex flex-wrap items-center justify-between gap-2">
-                <h2 class="text-base sm:text-lg font-extrabold text-kovaq-navy font-title m-0">
-                    Planograma de Perchas por Niveles (Superior / Ojos / Inferior)
-                </h2>
-                <span id="config-perchas-count" class="text-xs font-mono-num font-bold text-kovaq-slate">0 perchas</span>
-            </div>
-
-            <form id="form-planograma-percha" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 bg-slate-50 border border-kovaq-border p-4 rounded-xl">
-                <div>
-                    <label for="plano-id" class="block text-xs font-bold text-kovaq-navy mb-1">Código de percha</label>
-                    <input type="text" id="plano-id" required placeholder="Ej. PER-D1" class="kovaq-input w-full text-xs font-mono-num">
-                </div>
-                <div>
-                    <label for="plano-nombre" class="block text-xs font-bold text-kovaq-navy mb-1">Nombre de percha</label>
-                    <input type="text" id="plano-nombre" required placeholder="Ej. Percha D1 • Café" class="kovaq-input w-full text-xs">
-                </div>
-                <div>
-                    <label for="plano-cat" class="block text-xs font-bold text-kovaq-navy mb-1">Categoría</label>
-                    <input type="text" id="plano-cat" required placeholder="Ej. Bebidas" class="kovaq-input w-full text-xs">
-                </div>
-                <div>
-                    <label for="plano-cam" class="block text-xs font-bold text-kovaq-navy mb-1">Cámara asignada</label>
-                    <select id="plano-cam" class="kovaq-select w-full text-xs">
-                        <option value="CAM-01">CAM-01</option>
-                        <option value="CAM-02">CAM-02</option>
-                        <option value="CAM-03">CAM-03</option>
-                    </select>
-                </div>
-                <div>
-                    <label for="plano-prod-sup" class="block text-xs font-bold text-kovaq-navy mb-1">Nivel Superior (Subir cabeza)</label>
-                    <input type="text" id="plano-prod-sup" required placeholder="Producto nivel alto" class="kovaq-input w-full text-xs">
-                </div>
-                <div>
-                    <label for="plano-prod-med" class="block text-xs font-bold text-kovaq-navy mb-1">Nivel Medio (Altura ojos)</label>
-                    <input type="text" id="plano-prod-med" required placeholder="Producto nivel ojos" class="kovaq-input w-full text-xs">
-                </div>
-                <div>
-                    <label for="plano-prod-inf" class="block text-xs font-bold text-kovaq-navy mb-1">Nivel Inferior (Agacharse)</label>
-                    <input type="text" id="plano-prod-inf" required placeholder="Producto nivel bajo" class="kovaq-input w-full text-xs">
-                </div>
-                <div class="flex items-end">
-                    <button type="submit" class="btn-kovaq-primary w-full text-xs min-h-[42px]">Guardar planograma</button>
-                </div>
-            </form>
-
-            <div class="overflow-x-auto">
-                <table class="w-full text-left border-collapse text-xs">
-                    <caption class="sr-only">Perchas configuradas con sus niveles y promociones</caption>
-                    <thead class="bg-slate-100 border-b border-kovaq-border text-kovaq-navy font-bold uppercase">
-                        <tr>
-                            <th scope="col" class="p-2.5">Código</th>
-                            <th scope="col" class="p-2.5">Percha</th>
-                            <th scope="col" class="p-2.5">Niveles configurados</th>
-                            <th scope="col" class="p-2.5">Promociones POP</th>
-                            <th scope="col" class="p-2.5">Actividad</th>
-                        </tr>
-                    </thead>
-                    <tbody id="tabla-perchas-config-body" class="divide-y divide-kovaq-border text-kovaq-navy"></tbody>
-                </table>
-            </div>
-        </div>
+        </details>
     </section>
 
 </div>

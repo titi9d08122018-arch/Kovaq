@@ -430,6 +430,7 @@ async def api_dashboard_bundle(
         "stats": bundle["stats"],
         "resumen_publicidad": resumen_pub,
         "inventario": bundle["inventario"],
+        "fechas_disponibles": bundle.get("fechas_disponibles", {}),
         "map_state": map_state,
     }
 

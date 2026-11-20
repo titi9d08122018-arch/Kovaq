@@ -179,3 +179,23 @@ def test_sucursales_filtro_horario_y_mapa_calor_enlazado(client):
     assert len(dt["shelves"][0]["poly"]) == 5
     assert any(len(fr["p"]) >= 2 for fr in dt["frames"])
 
+    # 6. Calendario inteligente: solo fechas reales con registros (por sucursal y dentro del bundle)
+    r_fechas = client.get("/api/analytics/fechas_disponibles?sucursal_id=SUC-NORTE")
+    assert r_fechas.status_code == 200
+    fd = r_fechas.json()
+    assert fd["total_dias"] >= 20
+    assert fd["min_fecha"] <= fd["max_fecha"]
+    assert all(item["visitas"] > 0 for item in fd["fechas"])
+    assert "fechas_disponibles" in bun
+    assert bun["fechas_disponibles"]["min_fecha"] == fd["min_fecha"]
+    assert bun["fechas_disponibles"]["max_fecha"] == fd["max_fecha"]
+
+    # Filtrar exactamente por 1 día disponible devuelve datos reales de ese día
+    dia_con_datos = fd["fechas"][-1]["fecha"]
+    r_dia = client.get(
+        f"/api/dashboard_bundle?sucursal_id=SUC-NORTE&fecha_inicio={dia_con_datos}&fecha_fin={dia_con_datos}"
+    )
+    assert r_dia.status_code == 200
+    assert r_dia.json()["stats"]["trafico"] > 0
+
+

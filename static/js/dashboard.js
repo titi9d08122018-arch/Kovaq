@@ -1,7 +1,7 @@
 (function () {
     "use strict";
 
-    // Estado global del dashboard (enlazado a sucursal, horas, días, semanas, meses)
+    // Estado global del dashboard (enlazado a sucursal, período, horario y fechas con datos)
     let moduloActivo = "tab-vivo";
     let filtroTemporal = {
         sucursal_id: "SUC-NORTE",
@@ -24,9 +24,31 @@
     let chartHeatmapHora = null;
     let chartFranjasDonut = null;
 
-    // Control de concurrencia sin descartar clics del usuario (AbortController por canal)
+    // Estado del calendario inteligente (solo meses y días con registros reales)
+    const MESES_ES = [
+        "enero", "febrero", "marzo", "abril", "mayo", "junio",
+        "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre",
+    ];
+    let fechasConDatosMap = new Map();
+    let calMinFecha = "";
+    let calMaxFecha = "";
+    let calMesActual = { year: new Date().getFullYear(), month: new Date().getMonth() };
+    let calDraftInicio = "";
+    let calDraftFin = "";
+
+    // Caché SWR en cliente (20s TTL) para cambios instantáneos entre sucursales y períodos
+    const SWR_TTL_MS = 20000;
+    const bundleCache = new Map();
+    const heatCache = new Map();
+
+    // Control de concurrencia cancelable por canal
     const controllers = { bundle: null, mapa: null, live: null, heat: null, inv: null };
     const reqSeq = { bundle: 0, mapa: 0, heat: 0, inv: 0 };
+
+    // Animaciones suaves cancelables de KPIs y vectores del mapa 2D
+    const kpiAnimFrames = new Map();
+    const kpiValoresPrevios = new Map();
+    const personasSmooth = new Map();
 
     // Datos reales de trackeo YOLOv8n cuadro a cuadro para el video demo
     let demoTracks = null;
@@ -39,6 +61,15 @@
     heatOffscreen.width = 480;
     heatOffscreen.height = 240;
     const heatLUT = construirLutTermico();
+
+    function prefiereMovimientoReducido() {
+        return Boolean(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
+    }
+
+    function invalidarCaches() {
+        bundleCache.clear();
+        heatCache.clear();
+    }
 
     function construirLutTermico() {
         const lut = new Uint8ClampedArray(256 * 4);
@@ -86,6 +117,11 @@
         return fetch(url, { signal: ctrl.signal }).then((res) => ({ res, seq: mySeq }));
     }
 
+    function setCargandoToolbar(activo) {
+        const track = document.getElementById("toolbar-progress-track");
+        if (track) track.classList.toggle("loading", Boolean(activo));
+    }
+
     function mostrarAviso(bannerId, mensaje, tipo = "info") {
         const el = document.getElementById(bannerId);
         if (!el) return;
@@ -98,9 +134,49 @@
         el.textContent = mensaje;
     }
 
+    function ocultarAviso(bannerId) {
+        const el = document.getElementById(bannerId);
+        if (el) el.classList.add("hidden");
+    }
+
     function marcarEstadoCarga(texto) {
         const el = document.getElementById("indicador-carga-datos");
         if (el) el.textContent = texto;
+    }
+
+    function animarNumero(elId, valorDestino, formateador) {
+        const el = document.getElementById(elId);
+        if (!el) return;
+        const destino = Number.isFinite(Number(valorDestino)) ? Number(valorDestino) : 0;
+        const prevFrame = kpiAnimFrames.get(elId);
+        if (prevFrame) {
+            window.cancelAnimationFrame(prevFrame);
+            kpiAnimFrames.delete(elId);
+        }
+
+        const inicio = kpiValoresPrevios.has(elId) ? kpiValoresPrevios.get(elId) : destino;
+        kpiValoresPrevios.set(elId, destino);
+
+        if (prefiereMovimientoReducido() || Math.abs(destino - inicio) < 0.01) {
+            el.textContent = formateador(destino);
+            return;
+        }
+
+        const duracion = 220;
+        const t0 = performance.now();
+        function paso(now) {
+            const p = Math.min(1, (now - t0) / duracion);
+            const eased = 1 - Math.pow(1 - p, 3);
+            const actual = inicio + (destino - inicio) * eased;
+            el.textContent = formateador(actual);
+            if (p < 1) {
+                kpiAnimFrames.set(elId, window.requestAnimationFrame(paso));
+            } else {
+                kpiAnimFrames.delete(elId);
+                el.textContent = formateador(destino);
+            }
+        }
+        kpiAnimFrames.set(elId, window.requestAnimationFrame(paso));
     }
 
     function construirQueryTemporal(extra = {}) {
@@ -129,7 +205,215 @@
             : "SUC-NORTE";
     }
 
-    // Navegación ARIA Tablist (clic + ArrowLeft/ArrowRight/Home/End)
+    // =========================================================================
+    // GESTIÓN DE POPOVERS FLOTANTES (Calendario y Capas del Mapa)
+    // =========================================================================
+    function cerrarPopover(popoverId, triggerId) {
+        const pop = document.getElementById(popoverId);
+        const btn = document.getElementById(triggerId);
+        if (pop) pop.classList.add("hidden");
+        if (btn) btn.setAttribute("aria-expanded", "false");
+    }
+
+    function abrirPopover(popoverId, triggerId) {
+        if (popoverId !== "popover-calendario") cerrarPopover("popover-calendario", "btn-abrir-calendario");
+        if (popoverId !== "popover-capas") cerrarPopover("popover-capas", "btn-menu-capas");
+        const pop = document.getElementById(popoverId);
+        const btn = document.getElementById(triggerId);
+        if (!pop || !btn) return;
+        const estabaOculto = pop.classList.contains("hidden");
+        pop.classList.toggle("hidden", !estabaOculto);
+        btn.setAttribute("aria-expanded", estabaOculto ? "true" : "false");
+        if (estabaOculto && popoverId === "popover-calendario") {
+            calDraftInicio = filtroTemporal.fecha_inicio || "";
+            calDraftFin = filtroTemporal.fecha_fin || "";
+            renderCalendarioDisponible();
+        }
+    }
+
+    function inicializarCierreGlobalPopovers() {
+        // Evitar que clics internos (especialmente al re-renderizar días del calendario) cierren el popover
+        ["popover-calendario", "popover-capas"].forEach((id) => {
+            const pop = document.getElementById(id);
+            if (pop) {
+                pop.addEventListener("click", (ev) => ev.stopPropagation());
+            }
+        });
+
+        document.addEventListener("click", (ev) => {
+            const path = typeof ev.composedPath === "function" ? ev.composedPath() : [];
+            const calPop = document.getElementById("popover-calendario");
+            const calBtn = document.getElementById("btn-abrir-calendario");
+            if (calPop && !calPop.classList.contains("hidden")) {
+                const dentroCal = path.includes(calPop) || calPop.contains(ev.target);
+                const enBtnCal = calBtn && (path.includes(calBtn) || calBtn.contains(ev.target));
+                if (!dentroCal && !enBtnCal) {
+                    cerrarPopover("popover-calendario", "btn-abrir-calendario");
+                }
+            }
+            const capPop = document.getElementById("popover-capas");
+            const capBtn = document.getElementById("btn-menu-capas");
+            if (capPop && !capPop.classList.contains("hidden")) {
+                const dentroCap = path.includes(capPop) || capPop.contains(ev.target);
+                const enBtnCap = capBtn && (path.includes(capBtn) || capBtn.contains(ev.target));
+                if (!dentroCap && !enBtnCap) {
+                    cerrarPopover("popover-capas", "btn-menu-capas");
+                }
+            }
+        });
+
+        document.addEventListener("keydown", (ev) => {
+            if (ev.key !== "Escape") return;
+            const calPop = document.getElementById("popover-calendario");
+            if (calPop && !calPop.classList.contains("hidden")) {
+                cerrarPopover("popover-calendario", "btn-abrir-calendario");
+                document.getElementById("btn-abrir-calendario")?.focus();
+            }
+            const capPop = document.getElementById("popover-capas");
+            if (capPop && !capPop.classList.contains("hidden")) {
+                cerrarPopover("popover-capas", "btn-menu-capas");
+                document.getElementById("btn-menu-capas")?.focus();
+            }
+        });
+    }
+
+    // =========================================================================
+    // CALENDARIO INTELIGENTE RESTRINGIDO A FECHAS CON DATOS REGISTRADOS
+    // =========================================================================
+    function parseIsoYM(iso) {
+        if (!iso || iso.length < 7) return null;
+        const y = parseInt(iso.slice(0, 4), 10);
+        const m = parseInt(iso.slice(5, 7), 10) - 1;
+        if (!Number.isFinite(y) || !Number.isFinite(m)) return null;
+        return { year: y, month: m, ym: y * 12 + m };
+    }
+
+    function actualizarFechasDisponibles(info) {
+        if (!info || !Array.isArray(info.fechas)) return;
+        fechasConDatosMap = new Map();
+        info.fechas.forEach((f) => {
+            if (f && f.fecha) fechasConDatosMap.set(f.fecha, Number(f.visitas || 0));
+        });
+        calMinFecha = info.min_fecha || "";
+        calMaxFecha = info.max_fecha || "";
+
+        const minObj = parseIsoYM(calMinFecha);
+        const maxObj = parseIsoYM(calMaxFecha);
+        if (minObj && maxObj) {
+            const currYM = calMesActual.year * 12 + calMesActual.month;
+            if (currYM < minObj.ym || currYM > maxObj.ym) {
+                calMesActual = { year: maxObj.year, month: maxObj.month };
+            }
+        }
+
+        const rangoLbl = document.getElementById("cal-rango-disponible");
+        if (rangoLbl) {
+            if (calMinFecha && calMaxFecha) {
+                rangoLbl.textContent = `${info.total_dias || fechasConDatosMap.size} días registrados (${calMinFecha} al ${calMaxFecha})`;
+            } else {
+                rangoLbl.textContent = "Sin fechas con registros en esta sucursal";
+            }
+        }
+
+        const pop = document.getElementById("popover-calendario");
+        if (pop && !pop.classList.contains("hidden")) {
+            renderCalendarioDisponible();
+        }
+    }
+
+    function renderCalendarioDisponible() {
+        const grid = document.getElementById("cal-dias-grid");
+        const titulo = document.getElementById("cal-mes-titulo");
+        const btnPrev = document.getElementById("btn-cal-prev");
+        const btnNext = document.getElementById("btn-cal-next");
+        const selTxt = document.getElementById("cal-seleccion-texto");
+        if (!grid) return;
+
+        const minObj = parseIsoYM(calMinFecha);
+        const maxObj = parseIsoYM(calMaxFecha);
+        if (minObj && maxObj) {
+            const currYM = calMesActual.year * 12 + calMesActual.month;
+            if (currYM < minObj.ym) calMesActual = { year: minObj.year, month: minObj.month };
+            if (currYM > maxObj.ym) calMesActual = { year: maxObj.year, month: maxObj.month };
+        }
+
+        const { year, month } = calMesActual;
+        const currYM = year * 12 + month;
+
+        if (titulo) titulo.textContent = `${MESES_ES[month] || ""} ${year}`;
+        if (btnPrev) btnPrev.disabled = !minObj || currYM <= minObj.ym;
+        if (btnNext) btnNext.disabled = !maxObj || currYM >= maxObj.ym;
+
+        grid.textContent = "";
+        const primerDia = new Date(year, month, 1);
+        const offsetLunes = (primerDia.getDay() + 6) % 7;
+        const totalDiasMes = new Date(year, month + 1, 0).getDate();
+
+        for (let i = 0; i < offsetLunes; i++) {
+            const vacio = document.createElement("span");
+            vacio.setAttribute("aria-hidden", "true");
+            grid.appendChild(vacio);
+        }
+
+        for (let d = 1; d <= totalDiasMes; d++) {
+            const iso = `${year}-${String(month + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+            const visitas = fechasConDatosMap.get(iso) || 0;
+            const tieneDatos = visitas > 0;
+
+            const btn = document.createElement("button");
+            btn.type = "button";
+            btn.textContent = String(d);
+            btn.className = "cal-day";
+
+            if (tieneDatos) {
+                btn.classList.add("has-data");
+                btn.title = `${iso}: ${visitas} registros`;
+                btn.setAttribute("aria-label", `${iso}, ${visitas} registros`);
+
+                const ini = calDraftInicio;
+                const fin = calDraftFin || calDraftInicio;
+                if (ini && (iso === ini || iso === fin)) {
+                    btn.classList.add("selected-edge");
+                    btn.setAttribute("aria-pressed", "true");
+                } else if (ini && fin && iso > ini && iso < fin) {
+                    btn.classList.add("in-range");
+                }
+
+                btn.addEventListener("click", (ev) => {
+                    ev.stopPropagation();
+                    if (!calDraftInicio || (calDraftInicio && calDraftFin)) {
+                        calDraftInicio = iso;
+                        calDraftFin = "";
+                    } else if (iso < calDraftInicio) {
+                        calDraftFin = calDraftInicio;
+                        calDraftInicio = iso;
+                    } else {
+                        calDraftFin = iso;
+                    }
+                    renderCalendarioDisponible();
+                });
+            } else {
+                btn.disabled = true;
+                btn.setAttribute("aria-label", `${iso}, sin datos registrados`);
+            }
+
+            grid.appendChild(btn);
+        }
+
+        if (selTxt) {
+            if (calDraftInicio && calDraftFin && calDraftFin !== calDraftInicio) {
+                selTxt.textContent = `${calDraftInicio} a ${calDraftFin}`;
+            } else if (calDraftInicio) {
+                selTxt.textContent = `Día: ${calDraftInicio}`;
+            } else {
+                selTxt.textContent = "Elige 1 día o rango";
+            }
+        }
+    }
+
+    // =========================================================================
+    // NAVEGACIÓN ARIA TABLIST (clic + teclado)
+    // =========================================================================
     function cambiarModulo(moduloId) {
         const tabs = Array.from(document.querySelectorAll('[role="tab"]'));
         const panes = Array.from(document.querySelectorAll('[role="tabpanel"]'));
@@ -146,13 +430,13 @@
 
         if (moduloId === "tab-vivo") {
             if (ultimoEstadoMapa) dibujarPlanoTienda2D(ultimoEstadoMapa);
-            else cargarBundleDashboard();
+            else cargarBundleDashboard({ silencioso: false });
         } else if (moduloId === "tab-percha") {
             cargarHeatmaps();
         } else if (moduloId === "tab-inventario") {
             if (!document.querySelector(".item-inventario")) cargarInventarioReal();
         } else if (moduloId === "tab-marketing") {
-            if (!ultimoEstadoMapa) cargarBundleDashboard();
+            if (!ultimoEstadoMapa) cargarBundleDashboard({ silencioso: false });
         } else if (moduloId === "tab-config") {
             cargarConfiguracionMapa();
         }
@@ -180,7 +464,9 @@
         });
     }
 
-    // Etiquetas de período, franja horaria y sucursal
+    // =========================================================================
+    // ETIQUETAS Y REFRESCO CON CACHÉ SWR + BARRA DE PROGRESO SUTIL
+    // =========================================================================
     function actualizarEtiquetasPeriodo() {
         const mapNombre = { hora: "Hora", dia: "Día", semana: "Semana", mes: "Mes" };
         const agrupTxt = mapNombre[filtroTemporal.agrupacion] || "Semana";
@@ -192,72 +478,107 @@
 
         let textoRango = "";
         if (filtroTemporal.fecha_inicio) {
-            textoRango = `${filtroTemporal.fecha_inicio} a ${filtroTemporal.fecha_fin || filtroTemporal.fecha_inicio}`;
+            textoRango = filtroTemporal.fecha_fin && filtroTemporal.fecha_fin !== filtroTemporal.fecha_inicio
+                ? `${filtroTemporal.fecha_inicio} a ${filtroTemporal.fecha_fin}`
+                : filtroTemporal.fecha_inicio;
         } else if (filtroTemporal.horas !== null) {
             textoRango = filtroTemporal.horas === 1 ? "Última 1 hora" : `Últimas ${filtroTemporal.horas} horas`;
         } else {
             textoRango = `Últimos ${filtroTemporal.dias} días (${agrupTxt})`;
         }
 
+        let textoHorario = "Todo el día";
         if (filtroTemporal.hora_inicio !== "" || filtroTemporal.hora_fin !== "") {
             const hi = filtroTemporal.hora_inicio !== "" ? String(filtroTemporal.hora_inicio).padStart(2, "0") : "00";
             const hf = filtroTemporal.hora_fin !== "" ? String(filtroTemporal.hora_fin).padStart(2, "0") : "23";
-            textoRango += ` | ${hi}:00-${hf}:59`;
+            textoHorario = `${hi}:00 a ${hf}:59`;
         }
 
         const sub = document.getElementById("subtitulo-periodo-activo");
-        if (sub) sub.textContent = `${nombreSuc} • ${textoRango}`;
+        if (sub) sub.textContent = `${nombreSuc} • ${textoRango} • ${textoHorario}`;
 
-        ["badge-rango-fechas", "badge-rango-fechas-percha"].forEach((id) => {
-            const el = document.getElementById(id);
-            if (el) el.textContent = textoRango;
-        });
-    }
+        const badgePercha = document.getElementById("badge-rango-fechas-percha");
+        if (badgePercha) badgePercha.textContent = `${textoRango} • ${textoHorario}`;
 
-    async function refrescarDashboardsPorPeriodo() {
-        marcarEstadoCarga("Actualizando datos...");
-        const miSeq = reqSeq.bundle + 1;
-        const tareas = [cargarBundleDashboard()];
-        if (moduloActivo === "tab-percha") tareas.push(cargarHeatmaps());
-        if (moduloActivo === "tab-config") tareas.push(cargarConfiguracionMapa());
-        await Promise.allSettled(tareas);
-        if (miSeq === reqSeq.bundle) {
-            const ahora = new Date();
-            const hh = String(ahora.getHours()).padStart(2, "0");
-            const mm = String(ahora.getMinutes()).padStart(2, "0");
-            const ss = String(ahora.getSeconds()).padStart(2, "0");
-            marcarEstadoCarga(`Actualizado ${hh}:${mm}:${ss}`);
+        const lblCal = document.getElementById("lbl-boton-calendario");
+        if (lblCal) {
+            if (filtroTemporal.fecha_inicio) {
+                lblCal.textContent = filtroTemporal.fecha_fin && filtroTemporal.fecha_fin !== filtroTemporal.fecha_inicio
+                    ? `${filtroTemporal.fecha_inicio} a ${filtroTemporal.fecha_fin}`
+                    : filtroTemporal.fecha_inicio;
+            } else {
+                lblCal.textContent = "Elegir fechas";
+            }
         }
     }
 
-    async function cargarBundleDashboard() {
+    function aplicarBundleDashboard(b) {
+        if (!b) return;
+        if (b.fechas_disponibles) actualizarFechasDisponibles(b.fechas_disponibles);
+        if (b.stats) aplicarDatosStats(b.stats);
+        if (b.resumen_publicidad) aplicarResumenPublicidad(b.resumen_publicidad);
+        if (Array.isArray(b.inventario)) renderTablaInventario(b.inventario);
+        if (b.map_state) {
+            actualizarSelectorCamaras(b.map_state.camaras || [], b.map_state.camara_activa);
+            dibujarPlanoTienda2D(b.map_state);
+            actualizarPanelesReID(b.map_state);
+        }
+    }
+
+    async function refrescarDashboardsPorPeriodo(opciones = {}) {
+        const silencioso = Boolean(opciones.silencioso);
+        const forzar = Boolean(opciones.forzar);
+        if (!silencioso) setCargandoToolbar(true);
+
+        const tareas = [cargarBundleDashboard({ silencioso, forzar })];
+        if (moduloActivo === "tab-percha") tareas.push(cargarHeatmaps({ forzar }));
+        if (moduloActivo === "tab-config") tareas.push(cargarConfiguracionMapa());
+
+        await Promise.allSettled(tareas);
+
+        if (!silencioso) setCargandoToolbar(false);
+        const ahora = new Date();
+        const hh = String(ahora.getHours()).padStart(2, "0");
+        const mm = String(ahora.getMinutes()).padStart(2, "0");
+        const ss = String(ahora.getSeconds()).padStart(2, "0");
+        marcarEstadoCarga(`Actualizado ${hh}:${mm}:${ss}`);
+    }
+
+    async function cargarBundleDashboard(opciones = {}) {
+        const silencioso = Boolean(opciones.silencioso);
+        const forzar = Boolean(opciones.forzar);
+        const q = construirQueryTemporal();
+        const cached = bundleCache.get(q);
+
+        // Respuesta instantánea desde caché SWR mientras se revalida en segundo plano
+        if (!forzar && cached && (Date.now() - cached.ts) < SWR_TTL_MS) {
+            aplicarBundleDashboard(cached.data);
+            if ((Date.now() - cached.ts) < 5000 && !silencioso) {
+                return;
+            }
+        }
+
         try {
-            const { res, seq } = await fetchCancelable("bundle", `/api/dashboard_bundle?${construirQueryTemporal()}`);
-            if (!res.ok || seq !== reqSeq.bundle) return;
+            const { res, seq } = await fetchCancelable("bundle", `/api/dashboard_bundle?${q}`);
+            if (seq !== reqSeq.bundle) return;
+            if (!res.ok) {
+                if (!silencioso) {
+                    mostrarAviso("global-status-banner", "No se pudieron actualizar los datos en este momento. Se reintentará automáticamente.", "error");
+                }
+                return;
+            }
             const b = await res.json();
             if (seq !== reqSeq.bundle) return;
 
-            if (b.stats) aplicarDatosStats(b.stats);
-            if (b.resumen_publicidad) aplicarResumenPublicidad(b.resumen_publicidad);
-            if (Array.isArray(b.inventario)) renderTablaInventario(b.inventario);
-            if (b.map_state) {
-                actualizarSelectorCamaras(b.map_state.camaras || [], b.map_state.camara_activa);
-                dibujarPlanoTienda2D(b.map_state);
-                actualizarPanelesReID(b.map_state);
+            bundleCache.set(q, { ts: Date.now(), data: b });
+            ocultarAviso("global-status-banner");
+            aplicarBundleDashboard(b);
+        } catch (err) {
+            if (err && err.name === "AbortError") return;
+            if (!silencioso) {
+                mostrarAviso("global-status-banner", "Conexión interrumpida temporalmente. Manteniendo últimos datos visibles.", "error");
             }
-        } catch (_e) {
-            // Silencioso en abort o desconexión temporal
         }
-    }
-
-    function marcarBotonPresetActivo(btnActivo) {
-        document.querySelectorAll(".btn-periodo-preset").forEach((b) => {
-            const activo = b === btnActivo;
-            b.setAttribute("aria-pressed", activo ? "true" : "false");
-            b.className = activo
-                ? "btn-periodo-preset min-h-[36px] px-3 py-1 rounded-lg text-xs font-bold border border-kovaq-navy bg-kovaq-navy text-white"
-                : "btn-periodo-preset min-h-[36px] px-3 py-1 rounded-lg text-xs font-bold border border-kovaq-control bg-white text-kovaq-navy";
-        });
     }
 
     function inicializarFiltrosTemporalesYSucursal() {
@@ -266,79 +587,146 @@
             selSuc.addEventListener("change", () => {
                 filtroTemporal.sucursal_id = selSuc.value;
                 actualizarEtiquetasPeriodo();
-                refrescarDashboardsPorPeriodo();
+                refrescarDashboardsPorPeriodo({ silencioso: false });
             });
         }
 
-        const presetBtns = Array.from(document.querySelectorAll(".btn-periodo-preset"));
-        presetBtns.forEach((btn) => {
-            btn.addEventListener("click", () => {
-                filtroTemporal.agrupacion = btn.dataset.agrup || "semana";
-                if (btn.dataset.horas) {
-                    filtroTemporal.horas = parseInt(btn.dataset.horas, 10);
-                    filtroTemporal.dias = 1;
-                } else {
-                    filtroTemporal.horas = null;
-                    filtroTemporal.dias = parseInt(btn.dataset.dias || "30", 10);
-                }
+        // Selector desplegable de período
+        const selPeriodo = document.getElementById("select-periodo-preset");
+        if (selPeriodo) {
+            selPeriodo.addEventListener("change", () => {
+                const mapaPresets = {
+                    "1h": { agrup: "hora", horas: 1, dias: 1 },
+                    "6h": { agrup: "hora", horas: 6, dias: 1 },
+                    "24h": { agrup: "hora", horas: 24, dias: 1 },
+                    "7d": { agrup: "dia", horas: null, dias: 7 },
+                    "30d": { agrup: "semana", horas: null, dias: 30 },
+                    "90d": { agrup: "mes", horas: null, dias: 90 },
+                };
+                const cfg = mapaPresets[selPeriodo.value] || mapaPresets["30d"];
+                filtroTemporal.agrupacion = cfg.agrup;
+                filtroTemporal.horas = cfg.horas;
+                filtroTemporal.dias = cfg.dias;
                 filtroTemporal.fecha_inicio = "";
                 filtroTemporal.fecha_fin = "";
-
-                const fi = document.getElementById("filtro-fecha-inicio");
-                const ff = document.getElementById("filtro-fecha-fin");
-                if (fi) fi.value = "";
-                if (ff) ff.value = "";
+                calDraftInicio = "";
+                calDraftFin = "";
 
                 const selAgrup = document.getElementById("select-agrupacion-temporal");
                 if (selAgrup) selAgrup.value = filtroTemporal.agrupacion;
 
-                marcarBotonPresetActivo(btn);
                 actualizarEtiquetasPeriodo();
-                refrescarDashboardsPorPeriodo();
+                refrescarDashboardsPorPeriodo({ silencioso: false });
             });
-        });
+        }
 
+        // Selector desplegable de franja horaria + panel personalizado bajo demanda
+        const selHorario = document.getElementById("select-horario-preset");
+        const panelPers = document.getElementById("panel-horario-personalizado");
         const hiSel = document.getElementById("filtro-hora-inicio");
         const hfSel = document.getElementById("filtro-hora-fin");
+
+        if (selHorario) {
+            selHorario.addEventListener("change", () => {
+                const v = selHorario.value;
+                const franjas = {
+                    todo: ["", ""],
+                    manana: ["6", "11"],
+                    mediodia: ["11", "14"],
+                    tarde: ["14", "18"],
+                    noche: ["18", "23"],
+                };
+                if (v === "personalizado") {
+                    if (panelPers) panelPers.classList.remove("hidden");
+                    hiSel?.focus();
+                    return;
+                }
+                if (panelPers) panelPers.classList.add("hidden");
+                const [hi, hf] = franjas[v] || ["", ""];
+                filtroTemporal.hora_inicio = hi;
+                filtroTemporal.hora_fin = hf;
+                if (hiSel) hiSel.value = hi;
+                if (hfSel) hfSel.value = hf;
+                actualizarEtiquetasPeriodo();
+                refrescarDashboardsPorPeriodo({ silencioso: false });
+            });
+        }
+
         [hiSel, hfSel].forEach((sel) => {
             if (!sel) return;
             sel.addEventListener("change", () => {
                 filtroTemporal.hora_inicio = hiSel ? hiSel.value : "";
                 filtroTemporal.hora_fin = hfSel ? hfSel.value : "";
                 actualizarEtiquetasPeriodo();
-                refrescarDashboardsPorPeriodo();
+                refrescarDashboardsPorPeriodo({ silencioso: false });
             });
         });
+
+        const btnResetHorario = document.getElementById("btn-reset-horario");
+        if (btnResetHorario) {
+            btnResetHorario.addEventListener("click", () => {
+                filtroTemporal.hora_inicio = "";
+                filtroTemporal.hora_fin = "";
+                if (hiSel) hiSel.value = "";
+                if (hfSel) hfSel.value = "";
+                if (selHorario) selHorario.value = "todo";
+                if (panelPers) panelPers.classList.add("hidden");
+                actualizarEtiquetasPeriodo();
+                refrescarDashboardsPorPeriodo({ silencioso: false });
+            });
+        }
+
+        // Controles del popover del calendario inteligente
+        const btnAbrirCal = document.getElementById("btn-abrir-calendario");
+        if (btnAbrirCal) {
+            btnAbrirCal.addEventListener("click", () => abrirPopover("popover-calendario", "btn-abrir-calendario"));
+        }
+        const btnCerrarCal = document.getElementById("btn-cerrar-calendario");
+        if (btnCerrarCal) {
+            btnCerrarCal.addEventListener("click", () => cerrarPopover("popover-calendario", "btn-abrir-calendario"));
+        }
+
+        const btnPrev = document.getElementById("btn-cal-prev");
+        if (btnPrev) {
+            btnPrev.addEventListener("click", () => {
+                const m = calMesActual.month - 1;
+                calMesActual = m < 0 ? { year: calMesActual.year - 1, month: 11 } : { year: calMesActual.year, month: m };
+                renderCalendarioDisponible();
+            });
+        }
+        const btnNext = document.getElementById("btn-cal-next");
+        if (btnNext) {
+            btnNext.addEventListener("click", () => {
+                const m = calMesActual.month + 1;
+                calMesActual = m > 11 ? { year: calMesActual.year + 1, month: 0 } : { year: calMesActual.year, month: m };
+                renderCalendarioDisponible();
+            });
+        }
 
         const btnRango = document.getElementById("btn-aplicar-rango");
         if (btnRango) {
             btnRango.addEventListener("click", () => {
-                const fi = document.getElementById("filtro-fecha-inicio")?.value || "";
-                const ff = document.getElementById("filtro-fecha-fin")?.value || "";
-                const hi = hiSel?.value || "";
-                const hf = hfSel?.value || "";
-
-                if (!fi && hi === "" && hf === "") {
-                    mostrarAviso("global-status-banner", "Selecciona una fecha de inicio o un rango de horas para filtrar.", "error");
+                if (!calDraftInicio) {
+                    const selTxt = document.getElementById("cal-seleccion-texto");
+                    if (selTxt) selTxt.textContent = "Elige al menos 1 día con datos";
                     return;
                 }
-                if (fi) {
-                    filtroTemporal.fecha_inicio = fi;
-                    filtroTemporal.fecha_fin = ff || fi;
-                    filtroTemporal.horas = null;
-                    if (fi === (ff || fi)) {
-                        filtroTemporal.agrupacion = "hora";
-                        const selAgrup = document.getElementById("select-agrupacion-temporal");
-                        if (selAgrup) selAgrup.value = "hora";
-                    }
-                    marcarBotonPresetActivo(null);
-                }
-                filtroTemporal.hora_inicio = hi;
-                filtroTemporal.hora_fin = hf;
+                const fi = calDraftInicio;
+                const ff = calDraftFin || calDraftInicio;
+                filtroTemporal.fecha_inicio = fi;
+                filtroTemporal.fecha_fin = ff;
+                filtroTemporal.horas = null;
 
-                mostrarAviso("global-status-banner", "Filtro temporal y horario aplicado a todos los paneles y mapa de calor.", "ok");
+                // Ajustar agrupación óptima según longitud del rango elegido
+                const msDiff = Math.max(0, new Date(ff) - new Date(fi));
+                const diasDiff = Math.round(msDiff / 86400000);
+                filtroTemporal.agrupacion = diasDiff === 0 ? "hora" : (diasDiff <= 14 ? "dia" : "semana");
+                const selAgrup = document.getElementById("select-agrupacion-temporal");
+                if (selAgrup) selAgrup.value = filtroTemporal.agrupacion;
+
+                cerrarPopover("popover-calendario", "btn-abrir-calendario");
                 actualizarEtiquetasPeriodo();
-                refrescarDashboardsPorPeriodo();
+                refrescarDashboardsPorPeriodo({ silencioso: false });
             });
         }
 
@@ -352,17 +740,20 @@
                 filtroTemporal.fecha_fin = "";
                 filtroTemporal.hora_inicio = "";
                 filtroTemporal.hora_fin = "";
+                calDraftInicio = "";
+                calDraftFin = "";
 
-                ["filtro-fecha-inicio", "filtro-fecha-fin", "filtro-hora-inicio", "filtro-hora-fin"].forEach((id) => {
-                    const el = document.getElementById(id);
-                    if (el) el.value = "";
-                });
+                if (selPeriodo) selPeriodo.value = "30d";
+                if (selHorario) selHorario.value = "todo";
+                if (hiSel) hiSel.value = "";
+                if (hfSel) hfSel.value = "";
+                if (panelPers) panelPers.classList.add("hidden");
                 const selAgrup = document.getElementById("select-agrupacion-temporal");
                 if (selAgrup) selAgrup.value = "semana";
-                marcarBotonPresetActivo(document.getElementById("btn-periodo-mes"));
-                mostrarAviso("global-status-banner", "Filtros restablecidos a Últimos 30 días.", "info");
+
+                cerrarPopover("popover-calendario", "btn-abrir-calendario");
                 actualizarEtiquetasPeriodo();
-                refrescarDashboardsPorPeriodo();
+                refrescarDashboardsPorPeriodo({ silencioso: false });
             });
         }
 
@@ -397,7 +788,8 @@
         lista.forEach((s) => {
             const opt = document.createElement("option");
             opt.value = s.id;
-            opt.textContent = `${s.nombre} (${s.ciudad})`;
+            const nombreCorto = String(s.nombre || s.id).split("•")[0].trim();
+            opt.textContent = `${nombreCorto} (${s.ciudad})`;
             sel.appendChild(opt);
         });
         const optAll = document.createElement("option");
@@ -437,7 +829,7 @@
     }
 
     // =========================================================================
-    // MAPA ARQUITECTÓNICO 2D REAL + MAPA DE CALOR TÉRMICO ENLAZADO AL PERÍODO
+    // MAPA ARQUITECTÓNICO 2D + MAPA DE CALOR + INTERPOLACIÓN SUAVE DE VECTORES
     // =========================================================================
     function renderizarMapaCalorTermico(ctx, W, H, grid) {
         if (!Array.isArray(grid) || grid.length === 0 || !grid[0].length) return;
@@ -497,6 +889,25 @@
         ctx.restore();
     }
 
+    function obtenerPosicionInterpolada(pers) {
+        const clave = `${pers.origen || "be"}_${pers.global_id || pers.etiqueta}`;
+        const tx = Number(pers.x || 0.5);
+        const ty = Number(pers.y || 0.5);
+        const prev = personasSmooth.get(clave);
+        if (!prev || prefiereMovimientoReducido()) {
+            const pos = { x: tx, y: ty, tx, ty };
+            personasSmooth.set(clave, pos);
+            return pos;
+        }
+        prev.tx = tx;
+        prev.ty = ty;
+        prev.x += (tx - prev.x) * 0.24;
+        prev.y += (ty - prev.y) * 0.24;
+        if (Math.abs(tx - prev.x) < 0.0005) prev.x = tx;
+        if (Math.abs(ty - prev.y) < 0.0005) prev.y = ty;
+        return prev;
+    }
+
     function dibujarPlanoTienda2D(data) {
         const canvas = document.getElementById("store-map-canvas");
         if (!canvas || !data) return;
@@ -507,7 +918,7 @@
         const H = canvas.height;
         const plano = data.plano_arquitectura || {};
 
-        // 1. Piso arquitectónico de tienda con retícula de baldosas
+        // 1. Piso arquitectónico de tienda
         ctx.fillStyle = "#F8FAFC";
         ctx.fillRect(0, 0, W, H);
 
@@ -520,7 +931,7 @@
             ctx.beginPath(); ctx.moveTo(24, y); ctx.lineTo(W - 24, y); ctx.stroke();
         }
 
-        // 2. Zona de Bodega / Reposición (fondo rayado arquitectónico para personal)
+        // 2. Bodega / Reposición
         const bod = plano.bodega;
         if (bod) {
             const bx = bod.x * W, by = bod.y * H, bw = bod.w * W, bh = bod.h * H;
@@ -544,12 +955,12 @@
             ctx.fillText(bod.label || "BODEGA / PERSONAL", bx + 12, by + bh * 0.62);
         }
 
-        // 3. Capa de Mapa de Calor Térmico (vinculado al período y sucursal seleccionados)
+        // 3. Capa de Mapa de Calor Térmico
         if (capasMapa.calor) {
             renderizarMapaCalorTermico(ctx, W, H, data.heatmap_grid || []);
         }
 
-        // 4. Muros perimetrales estructurales de la tienda
+        // 4. Muros perimetrales
         const wallPadX = 24;
         const wallPadY = 18;
         ctx.save();
@@ -558,7 +969,7 @@
         ctx.strokeRect(wallPadX, wallPadY, W - wallPadX * 2, H - wallPadY * 2);
         ctx.restore();
 
-        // 5. Etiquetas de Pasillos y Cabeceras Promocionales (Infraestructura interna)
+        // 5. Etiquetas de Pasillos y Cabeceras
         (plano.pasillos || []).forEach((ps) => {
             ctx.save();
             ctx.fillStyle = "rgba(12, 35, 64, 0.52)";
@@ -577,11 +988,11 @@
             ctx.strokeRect(cx, cy, cw, ch);
             ctx.fillStyle = "#C23B00";
             ctx.font = "bold 9px 'JetBrains Mono', monospace";
-            ctx.fillText(cab.label || "POP", cx + 4, cy + ch / 2 + 3);
+            ctx.fillText(cab.label || "CAB", cx + 4, cy + ch / 2 + 3);
             ctx.restore();
         });
 
-        // 6. Puerta de Acceso Principal (abertura en muro izquierdo + puertas corredizas + flechas)
+        // 6. Puerta de Acceso Principal
         const puerta = plano.puerta_entrada || (data.zonas_arquitectura || {}).puerta_entrada;
         if (puerta) {
             const px = puerta.x * W, py = puerta.y * H, pw = puerta.w * W, ph = puerta.h * H;
@@ -591,7 +1002,6 @@
             ctx.strokeStyle = "#059669";
             ctx.lineWidth = 2.5;
             ctx.strokeRect(px, py, pw, ph);
-            // Hojas corredizas de vidrio
             ctx.strokeStyle = "#10B981";
             ctx.lineWidth = 3;
             ctx.beginPath();
@@ -600,7 +1010,6 @@
             ctx.moveTo(wallPadX, py + ph * 0.56);
             ctx.lineTo(wallPadX, py + ph * 0.88);
             ctx.stroke();
-            // Flecha verde de entrada
             ctx.fillStyle = "#047857";
             ctx.font = "bold 10px 'Space Grotesk', sans-serif";
             ctx.save();
@@ -612,7 +1021,7 @@
             ctx.restore();
         }
 
-        // 7. Zona de Atención / Retiro y Línea de Cajas con estaciones POS individuales
+        // 7. Zona de Atención y Línea de Cajas
         const aten = plano.zona_atencion;
         if (aten) {
             const ax = aten.x * W, ay = aten.y * H, aw = aten.w * W, ah = aten.h * H;
@@ -671,7 +1080,7 @@
             ctx.restore();
         });
 
-        // 9. Góndolas / Perchas con arquitectura de estantería, temperatura y tomas del período
+        // 9. Góndolas / Perchas de productos
         (data.perchas || []).forEach((p) => {
             const px = p.map_x * W, py = p.map_y * H, pw = p.map_w * W, ph = p.map_h * H;
             const temp = p.temperatura || "fria";
@@ -681,11 +1090,9 @@
             const tempLbl = temp === "caliente" ? "CALIENTE" : (temp === "templada" ? "MEDIA" : "FRÍA");
 
             ctx.save();
-            // Sombra sutil de mobiliario
-            ctx.fillStyle = "rgba(12, 35, 64, 0.10)";
+            ctx.fillStyle = "rgba(12, 35, 64, 0.08)";
             ctx.fillRect(px + 3, py + 3, pw, ph);
 
-            // Cuerpo arquitectónico de góndola
             ctx.fillStyle = "#FFFFFF";
             ctx.strokeStyle = bordeColor;
             ctx.lineWidth = 2.5;
@@ -694,7 +1101,6 @@
             ctx.fill();
             ctx.stroke();
 
-            // Línea central estructural de góndola doble faz
             ctx.strokeStyle = "#CBD5E1";
             ctx.lineWidth = 1;
             ctx.beginPath();
@@ -707,22 +1113,18 @@
             }
             ctx.stroke();
 
-            // Cabecera de texto de percha
             ctx.fillStyle = "#0C2340";
             ctx.font = "bold 11px 'Space Grotesk', sans-serif";
             ctx.fillText(p.id, px + 8, py + 16);
 
             ctx.fillStyle = "#475569";
             ctx.font = "600 10px 'Inter', sans-serif";
-            const catTxt = String(p.categoria || "").slice(0, 14);
-            ctx.fillText(catTxt, px + 8, py + 30);
+            ctx.fillText(String(p.categoria || "").slice(0, 14), px + 8, py + 30);
 
-            // Métrica del período enlazada
             ctx.fillStyle = "#0C2340";
             ctx.font = "bold 10px 'JetBrains Mono', monospace";
             ctx.fillText(`${p.tomas || 0} tomas`, px + 8, py + Math.min(ph - 8, 46));
 
-            // Etiqueta de temperatura
             if (pw >= 120) {
                 const bw = 54;
                 ctx.fillStyle = badgeBg;
@@ -731,19 +1133,10 @@
                 ctx.font = "bold 9px 'JetBrains Mono', monospace";
                 ctx.fillText(tempLbl, px + pw - bw - 2, py + 17);
             }
-
-            // Indicador de promoción POP activa
-            if (Array.isArray(p.promociones) && p.promociones.length > 0 && ph >= 52) {
-                ctx.fillStyle = "#C23B00";
-                ctx.fillRect(px + pw - 36, py + ph - 20, 30, 14);
-                ctx.fillStyle = "#FFFFFF";
-                ctx.font = "bold 8px 'JetBrains Mono', monospace";
-                ctx.fillText("POP", px + pw - 30, py + ph - 10);
-            }
             ctx.restore();
         });
 
-        // 10. Cámaras CCTV de techo con conos de campo de visión (FOV)
+        // 10. Cámaras CCTV con conos FOV
         if (capasMapa.fov) {
             (data.camaras || []).forEach((cam) => {
                 const cx = cam.pos_x * W;
@@ -766,7 +1159,6 @@
                 ctx.stroke();
                 ctx.setLineDash([]);
 
-                // Cuerpo físico de cámara rotado hacia su ángulo de cobertura
                 ctx.translate(cx, cy);
                 ctx.rotate(rad);
                 ctx.fillStyle = esActiva ? "#C23B00" : "#0C2340";
@@ -776,7 +1168,6 @@
                 ctx.roundRect(-9, -6, 15, 12, 3);
                 ctx.fill();
                 ctx.stroke();
-                // Lente direccional
                 ctx.beginPath();
                 ctx.moveTo(6, -4);
                 ctx.lineTo(12, -7);
@@ -786,7 +1177,6 @@
                 ctx.fill();
                 ctx.restore();
 
-                // Etiqueta de cámara (desplazada a la derecha cuando está cerca de la bodega superior)
                 ctx.save();
                 const nearTop = cy < 115;
                 const lblX = nearTop ? Math.min(W - 76, cx + 16) : Math.max(30, cx - 22);
@@ -801,12 +1191,13 @@
             });
         }
 
-        // 11. Vectores anónimos vivos (backend + personas trackeadas en tiempo real del video)
+        // 11. Vectores anónimos vivos con interpolación fluida
         if (capasMapa.vectores) {
             const listaPersonas = combinarPersonasMapa(data.personas || []);
             listaPersonas.forEach((pers) => {
-                const px = pers.x * W;
-                const py = pers.y * H;
+                const interp = obtenerPosicionInterpolada(pers);
+                const px = interp.x * W;
+                const py = interp.y * H;
                 const esCli = pers.es_cliente_valido !== false;
                 const color = esCli ? (pers.origen === "video_yolo" ? "#C23B00" : "#059669") : "#64748B";
 
@@ -848,7 +1239,7 @@
             });
         }
 
-        // 12. Escala arquitectónica inferior izquierda
+        // 12. Escala arquitectónica
         const dims = plano.dimensiones_m || [42, 24];
         ctx.save();
         ctx.fillStyle = "rgba(255, 255, 255, 0.9)";
@@ -860,19 +1251,19 @@
 
         const tituloEl = document.getElementById("titulo-plano-sucursal");
         if (tituloEl && data.sucursal_nombre) {
-            tituloEl.textContent = `Mapa de Infraestructura y Calor • ${data.sucursal_nombre}`;
+            tituloEl.textContent = `Mapa de Perchas y Calor • ${data.sucursal_nombre}`;
         }
         const subEl = document.getElementById("subtitulo-plano-arquitectura");
         if (subEl) {
             const muestras = data.heatmap_meta?.total_muestras || 0;
-            subEl.textContent = `${plano.nombre_plano || "Planta Comercial"} • ${muestras} registros espaciales en el período seleccionado.`;
+            subEl.textContent = `${plano.nombre_plano || "Planta Comercial"} • ${muestras} registros en el período seleccionado.`;
         }
 
         const totalPerchas = (data.perchas || []).length;
         const totalCams = (data.camaras || []).length;
         canvas.setAttribute(
             "aria-label",
-            `Mapa arquitectónico de ${data.sucursal_nombre || "sucursal"}: ${totalCams} cámaras CCTV, ${totalPerchas} perchas y ${data.heatmap_meta?.total_muestras || 0} registros de calor del período.`
+            `Mapa arquitectónico de ${data.sucursal_nombre || "sucursal"}: ${totalCams} cámaras CCTV, ${totalPerchas} perchas y ${data.heatmap_meta?.total_muestras || 0} registros del período.`
         );
     }
 
@@ -899,64 +1290,64 @@
     function inicializarInteraccionMapa() {
         const canvas = document.getElementById("store-map-canvas");
         const tooltip = document.getElementById("map-tooltip");
-        if (!canvas || !tooltip) return;
+        if (canvas && tooltip) {
+            canvas.addEventListener("mousemove", (ev) => {
+                if (!ultimoEstadoMapa) return;
+                const rect = canvas.getBoundingClientRect();
+                const nx = (ev.clientX - rect.left) / rect.width;
+                const ny = (ev.clientY - rect.top) / rect.height;
 
-        canvas.addEventListener("mousemove", (ev) => {
-            if (!ultimoEstadoMapa) return;
-            const rect = canvas.getBoundingClientRect();
-            const nx = (ev.clientX - rect.left) / rect.width;
-            const ny = (ev.clientY - rect.top) / rect.height;
+                const percha = (ultimoEstadoMapa.perchas || []).find(
+                    (p) => nx >= p.map_x && nx <= p.map_x + p.map_w && ny >= p.map_y && ny <= p.map_y + p.map_h
+                );
+                const cam = (ultimoEstadoMapa.camaras || []).find(
+                    (c) => Math.hypot(nx - c.pos_x, ny - c.pos_y) <= 0.035
+                );
 
-            const percha = (ultimoEstadoMapa.perchas || []).find(
-                (p) => nx >= p.map_x && nx <= p.map_x + p.map_w && ny >= p.map_y && ny <= p.map_y + p.map_h
-            );
-            const cam = (ultimoEstadoMapa.camaras || []).find(
-                (c) => Math.hypot(nx - c.pos_x, ny - c.pos_y) <= 0.035
-            );
-
-            if (percha) {
-                const promoTxt = percha.promociones && percha.promociones.length > 0
-                    ? `Promo: ${percha.promociones[0].titulo}`
-                    : "Sin promo POP activa";
-                tooltip.textContent = `${percha.id} (${percha.categoria}) | Tomas: ${percha.tomas || 0} | Dev: ${percha.devoluciones || 0} | Dwell: ${percha.comportamiento?.dwell_prom || 0}s | ${promoTxt}`;
-                tooltip.style.left = `${Math.min(rect.width - 230, Math.max(8, ev.clientX - rect.left + 12))}px`;
-                tooltip.style.top = `${Math.max(8, ev.clientY - rect.top - 48)}px`;
-                tooltip.classList.remove("hidden");
-                canvas.style.cursor = "pointer";
-            } else if (cam) {
-                tooltip.textContent = `${cam.id}: ${cam.nombre} (Clic para seleccionar cámara)`;
-                tooltip.style.left = `${Math.min(rect.width - 230, Math.max(8, ev.clientX - rect.left + 12))}px`;
-                tooltip.style.top = `${Math.max(8, ev.clientY - rect.top - 40)}px`;
-                tooltip.classList.remove("hidden");
-                canvas.style.cursor = "pointer";
-            } else {
-                tooltip.classList.add("hidden");
-                canvas.style.cursor = "default";
-            }
-        });
-
-        canvas.addEventListener("mouseleave", () => {
-            tooltip.classList.add("hidden");
-        });
-
-        canvas.addEventListener("click", (ev) => {
-            if (!ultimoEstadoMapa) return;
-            const rect = canvas.getBoundingClientRect();
-            const nx = (ev.clientX - rect.left) / rect.width;
-            const ny = (ev.clientY - rect.top) / rect.height;
-            const cam = (ultimoEstadoMapa.camaras || []).find(
-                (c) => Math.hypot(nx - c.pos_x, ny - c.pos_y) <= 0.04
-            );
-            if (cam) {
-                const selCam = document.getElementById("select-camara-mapa");
-                if (selCam) {
-                    selCam.value = cam.id;
-                    selCam.dispatchEvent(new Event("change"));
+                if (percha) {
+                    tooltip.textContent = `${percha.id} (${percha.categoria}) | Tomas: ${percha.tomas || 0} | Dev: ${percha.devoluciones || 0} | Permanencia: ${percha.comportamiento?.dwell_prom || 0}s`;
+                    tooltip.style.left = `${Math.min(rect.width - 230, Math.max(8, ev.clientX - rect.left + 12))}px`;
+                    tooltip.style.top = `${Math.max(8, ev.clientY - rect.top - 48)}px`;
+                    tooltip.classList.remove("hidden");
+                    canvas.style.cursor = "pointer";
+                } else if (cam) {
+                    tooltip.textContent = `${cam.id}: ${cam.nombre} (Clic para seleccionar cámara)`;
+                    tooltip.style.left = `${Math.min(rect.width - 230, Math.max(8, ev.clientX - rect.left + 12))}px`;
+                    tooltip.style.top = `${Math.max(8, ev.clientY - rect.top - 40)}px`;
+                    tooltip.classList.remove("hidden");
+                    canvas.style.cursor = "pointer";
+                } else {
+                    tooltip.classList.add("hidden");
+                    canvas.style.cursor = "default";
                 }
-            }
-        });
+            });
 
-        // Controles de capas del mapa
+            canvas.addEventListener("mouseleave", () => tooltip.classList.add("hidden"));
+
+            canvas.addEventListener("click", (ev) => {
+                if (!ultimoEstadoMapa) return;
+                const rect = canvas.getBoundingClientRect();
+                const nx = (ev.clientX - rect.left) / rect.width;
+                const ny = (ev.clientY - rect.top) / rect.height;
+                const cam = (ultimoEstadoMapa.camaras || []).find(
+                    (c) => Math.hypot(nx - c.pos_x, ny - c.pos_y) <= 0.04
+                );
+                if (cam) {
+                    const selCam = document.getElementById("select-camara-mapa");
+                    if (selCam) {
+                        selCam.value = cam.id;
+                        selCam.dispatchEvent(new Event("change"));
+                    }
+                }
+            });
+        }
+
+        // Menú desplegable de capas del mapa
+        const btnCapas = document.getElementById("btn-menu-capas");
+        if (btnCapas) {
+            btnCapas.addEventListener("click", () => abrirPopover("popover-capas", "btn-menu-capas"));
+        }
+
         [
             { id: "btn-capa-calor", key: "calor" },
             { id: "btn-capa-fov", key: "fov" },
@@ -968,6 +1359,8 @@
                 capasMapa[key] = !capasMapa[key];
                 btn.classList.toggle("active", capasMapa[key]);
                 btn.setAttribute("aria-pressed", capasMapa[key] ? "true" : "false");
+                const chk = btn.querySelector("i");
+                if (chk) chk.style.opacity = capasMapa[key] ? "1" : "0";
                 if (ultimoEstadoMapa) dibujarPlanoTienda2D(ultimoEstadoMapa);
             });
         });
@@ -1013,9 +1406,14 @@
             simBtnTxt.textContent = data.simulacion_activa ? "Pausar" : "Activar";
         }
 
+        const personas = combinarPersonasMapa(data.personas || []);
+        const badgeReId = document.getElementById("badge-resumen-reid");
+        if (badgeReId) {
+            badgeReId.textContent = `${personas.length} en escena • ${handoffs.length} traspasos`;
+        }
+
         const listaPers = document.getElementById("lista-personas-reid");
         if (listaPers) {
-            const personas = combinarPersonasMapa(data.personas || []);
             listaPers.textContent = "";
             if (personas.length === 0) {
                 listaPers.textContent = "Sin vectores activos en el plano en este instante.";
@@ -1076,19 +1474,17 @@
             dibujarPlanoTienda2D(data);
             actualizarPanelesReID(data);
         } catch (_e) {
-            // Silencioso en abort o desconexión temporal
+            // Silencioso en abort
         }
     }
 
     // =========================================================================
-    // MOTOR DE TRACKEO EN TIEMPO REAL SOBRE EL VIDEO (POLÍGONOS EN PERSPECTIVA + PERSONAS)
+    // TRACKEO EN TIEMPO REAL SOBRE EL VIDEO (POLÍGONOS EN PERSPECTIVA + PERSONAS)
     // =========================================================================
     async function cargarDemoTracks() {
         try {
             const res = await fetch("/static/demo_tracks.json");
-            if (res.ok) {
-                demoTracks = await res.json();
-            }
+            if (res.ok) demoTracks = await res.json();
         } catch (_e) {
             // Silencioso
         }
@@ -1106,14 +1502,12 @@
         });
         ctx.closePath();
 
-        // Relleno translúcido solo dentro del polígono de la percha
         ctx.fillStyle = colorHex === "#FE5000" ? "rgba(254, 80, 0, 0.14)" : "rgba(245, 158, 11, 0.14)";
         ctx.fill();
         ctx.strokeStyle = colorHex || "#FE5000";
         ctx.lineWidth = 2.5;
         ctx.stroke();
 
-        // Líneas sutiles de niveles en perspectiva (Superior / Ojos / Inferior)
         if (polyNorm.length >= 5) {
             ctx.strokeStyle = "rgba(255, 255, 255, 0.28)";
             ctx.lineWidth = 1;
@@ -1131,7 +1525,6 @@
             ctx.setLineDash([]);
         }
 
-        // Etiqueta compacta en esquina sin obstruir el pasillo
         ctx.font = "bold 12px 'Space Grotesk', sans-serif";
         const textW = ctx.measureText(label).width + 14;
         const lx = alignRight ? (W - textW - 10) : 10;
@@ -1159,7 +1552,6 @@
         const color = !esCli ? "#94A3B8" : (enPercha ? "#FE5000" : "#22C55E");
 
         ctx.save();
-        // Escudo de privacidad anónima sobre zona facial (top 22% de la persona)
         const headH = Math.max(14, bh * 0.22);
         ctx.fillStyle = "rgba(12, 35, 64, 0.58)";
         ctx.fillRect(x1 + 2, y1 + 2, bw - 4, headH);
@@ -1167,7 +1559,6 @@
         ctx.font = "bold 9px 'JetBrains Mono', monospace";
         ctx.fillText("ANÓNIMO", x1 + 6, y1 + Math.min(headH - 4, 14));
 
-        // Caja principal limpia con esquinas reforzadas
         ctx.strokeStyle = color;
         ctx.lineWidth = 2.2;
         ctx.strokeRect(x1, y1, bw, bh);
@@ -1181,7 +1572,6 @@
         ctx.moveTo(x2 - corner, y2); ctx.lineTo(x2, y2); ctx.lineTo(x2, y2 - corner);
         ctx.stroke();
 
-        // Vector direccional hacia percha si está mirando/alcanzando
         if (p.gaze === "left" || p.gaze === "right") {
             const gy = y1 + headH * 0.6;
             const gxStart = p.gaze === "left" ? x1 : x2;
@@ -1194,7 +1584,6 @@
             ctx.stroke();
         }
 
-        // Etiqueta superior con anti-colisión vertical para evitar solapamientos entre sujetos cercanos
         const dwellTxt = p.dwell > 0 ? ` (${p.dwell.toFixed(1)}s)` : "";
         const tag = `${p.label} | ${p.postura}${dwellTxt}`;
         ctx.font = "bold 11px 'JetBrains Mono', monospace";
@@ -1238,7 +1627,6 @@
             ctx.clearRect(0, 0, W, H);
             const etiquetasOcupadas = [];
 
-            // Modo A: Video HTML5 sincronizado cuadro a cuadro con detecciones reales YOLOv8n
             if (videoEl && demoTracks && Array.isArray(demoTracks.frames) && demoTracks.frames.length > 0) {
                 const shelves = demoTracks.shelves || [];
                 shelves.forEach((sh) => {
@@ -1265,15 +1653,15 @@
                     hudChip.textContent = `YOLOv8n • ${nCli} clientes • ${nStaff} staff • ${(videoEl.currentTime || 0).toFixed(1)}s`;
                 }
 
-                // Sincronizar personas del video sobre el mapa arquitectónico cada 250ms
-                if (ultimoEstadoMapa && ts - ultimoSyncMapa >= 250) {
+                // Interpolación suave de vectores en el mapa 2D (~15 fps cuando hay movimiento)
+                const intervaloMapa = prefiereMovimientoReducido() ? 400 : 66;
+                if (ultimoEstadoMapa && ts - ultimoSyncMapa >= intervaloMapa) {
                     ultimoSyncMapa = ts;
                     dibujarPlanoTienda2D(ultimoEstadoMapa);
                 }
                 return;
             }
 
-            // Modo B: Stream procesado MJPEG o archivo subido (/api/live_events)
             if (liveTelemetriaBackend) {
                 (liveTelemetriaBackend.perchas_roi || []).forEach((po) => {
                     if (po.poly_norm) {
@@ -1312,8 +1700,8 @@
 
             const estadoEl = document.getElementById("estado-sistema-texto");
             if (estadoEl) {
-                if (data.simulacion_activa) estadoEl.textContent = "Trackeo + Gemelo 2D";
-                else if (data.estado === "en_vivo") estadoEl.textContent = "Cámara en vivo";
+                if (data.simulacion_activa) estadoEl.textContent = "Trackeo en vivo";
+                else if (data.estado === "en_vivo") estadoEl.textContent = "Cámara conectada";
                 else estadoEl.textContent = "Sistema activo";
             }
 
@@ -1382,7 +1770,9 @@
         }
     }
 
-    // KPIs Históricos (aplicación unificada)
+    // =========================================================================
+    // KPIs Y CONDUCTA FRENTE A LA PERCHA (con transición numérica suave)
+    // =========================================================================
     function aplicarDatosStats(d) {
         const traf = Number(d.trafico || 0);
         const tom = Number(d.tomados || 0);
@@ -1390,15 +1780,13 @@
         const perm = Number(d.permanencia_promedio_seg || 0);
         const conv = traf > 0 ? Math.min(100, (tom / traf) * 100) : 0;
 
-        const setText = (id, val) => {
-            const el = document.getElementById(id);
-            if (el) el.textContent = val;
-        };
-        setText("stat-hist-trafico", String(traf));
-        setText("stat-hist-permanencia", `${perm.toFixed(1)} s`);
-        setText("stat-hist-tomados", String(tom));
-        setText("stat-hist-devueltos", `${dev} devueltos a último momento`);
-        setText("stat-hist-conversion", `${conv.toFixed(1)}%`);
+        animarNumero("stat-hist-trafico", traf, (v) => String(Math.round(v)));
+        animarNumero("stat-hist-permanencia", perm, (v) => `${v.toFixed(1)} s`);
+        animarNumero("stat-hist-tomados", tom, (v) => String(Math.round(v)));
+        animarNumero("stat-hist-conversion", conv, (v) => `${v.toFixed(1)}%`);
+
+        const devEl = document.getElementById("stat-hist-devueltos");
+        if (devEl) devEl.textContent = `${dev} devueltos a último momento`;
 
         const bar = document.getElementById("progress-live-conversion");
         const barWrap = document.getElementById("progress-live-conversion-bar");
@@ -1410,14 +1798,13 @@
         const priv = d.privacidad || {};
         const privEl = document.getElementById("exec-privacidad-resumen");
         if (privEl) {
-            privEl.textContent = `${priv.clientes_validados_puerta_caja || 0} clientes validados Puerta a Caja • ${priv.empleados_excluidos || 0} eventos de personal excluidos.`;
+            privEl.textContent = `${priv.clientes_validados_puerta_caja || 0} clientes validados en percha • ${priv.empleados_excluidos || 0} recorridos de personal excluidos.`;
         }
 
         const comp = d.comportamiento_visual || {};
         const setPair = (idCnt, idDwell, obj) => {
-            const cEl = document.getElementById(idCnt);
+            animarNumero(idCnt, Number(obj?.casos || 0), (v) => String(Math.round(v)));
             const dEl = document.getElementById(idDwell);
-            if (cEl) cEl.textContent = String(obj?.casos || 0);
             if (dEl) dEl.textContent = `${Number(obj?.dwell || 0).toFixed(1)} s promedio`;
         };
         setPair("comp-mira-compra", "comp-mira-compra-dwell", comp.mira_y_compra);
@@ -1426,13 +1813,9 @@
         setPair("comp-devuelve", "comp-devuelve-dwell", comp.ultimo_momento_devuelve);
 
         const post = d.postura_cabeza || {};
-        const setNum = (id, v) => {
-            const el = document.getElementById(id);
-            if (el) el.textContent = String(v || 0);
-        };
-        setNum("postura-giro", post.giro_percha);
-        setNum("postura-sube", post.sube_cabeza);
-        setNum("postura-agacha", post.se_agacha);
+        animarNumero("postura-giro", Number(post.giro_percha || 0), (v) => String(Math.round(v)));
+        animarNumero("postura-sube", Number(post.sube_cabeza || 0), (v) => String(Math.round(v)));
+        animarNumero("postura-agacha", Number(post.se_agacha || 0), (v) => String(Math.round(v)));
 
         const renderZonas = (idLista, items, vacioTxt) => {
             const ul = document.getElementById(idLista);
@@ -1458,8 +1841,8 @@
                 ul.appendChild(li);
             });
         };
-        renderZonas("lista-zonas-calientes", d.zonas_calientes, "Sin zonas calientes en este período.");
-        renderZonas("lista-zonas-frias", d.zonas_frias, "Todas las perchas tienen alta rotación en este período.");
+        renderZonas("lista-zonas-calientes", d.zonas_calientes, "Sin perchas calientes en este período.");
+        renderZonas("lista-zonas-frias", d.zonas_frias, "Todas las perchas registran buena rotación en este período.");
 
         const renderProdResumen = (idLista, items, keyVal, sufijo) => {
             const ul = document.getElementById(idLista);
@@ -1502,8 +1885,8 @@
                 const tr = document.createElement("tr");
                 const td = document.createElement("td");
                 td.colSpan = 4;
-                td.className = "p-6 text-center text-kovaq-slate";
-                td.textContent = "No hay promociones registradas para esta sucursal. Crea una en Configuración.";
+                td.className = "p-4 text-center text-kovaq-slate";
+                td.textContent = "Sin promociones activas. Puedes configurar campañas opcionales en Configuración.";
                 tr.appendChild(td);
                 tbodyPromos.appendChild(tr);
             } else {
@@ -1512,32 +1895,29 @@
                     tr.className = "hover:bg-slate-50";
 
                     const tdNom = document.createElement("td");
-                    tdNom.className = "p-3";
+                    tdNom.className = "p-2.5";
                     const t1 = document.createElement("strong");
                     t1.className = "block text-kovaq-navy";
                     t1.textContent = `${pr.percha_id} • ${pr.titulo}`;
                     const t2 = document.createElement("span");
                     t2.className = "text-kovaq-slate";
-                    t2.textContent = `${pr.producto} (${pr.tipo_publicidad}, -${pr.descuento_pct}%)`;
+                    t2.textContent = `${pr.producto} (-${pr.descuento_pct}%)`;
                     tdNom.append(t1, t2);
 
                     const tdCnt = document.createElement("td");
-                    tdCnt.className = "p-3 font-mono-num";
+                    tdCnt.className = "p-2.5 font-mono-num whitespace-nowrap";
                     tdCnt.textContent = `${pr.tomas} / ${pr.devueltos}`;
 
                     const tdRet = document.createElement("td");
-                    tdRet.className = "p-3 font-mono-num font-bold text-emerald-800";
+                    tdRet.className = "p-2.5 font-mono-num font-bold text-emerald-800 whitespace-nowrap";
                     tdRet.textContent = `${pr.efectividad_pct}%`;
 
                     const tdDiag = document.createElement("td");
-                    tdDiag.className = "p-3";
+                    tdDiag.className = "p-2.5";
                     const st = document.createElement("strong");
                     st.className = "block text-kovaq-orange";
                     st.textContent = pr.estado_efecto;
-                    const dg = document.createElement("span");
-                    dg.className = "text-kovaq-slate";
-                    dg.textContent = pr.diagnostico;
-                    tdDiag.append(st, dg);
+                    tdDiag.append(st);
 
                     tr.append(tdNom, tdCnt, tdRet, tdDiag);
                     tbodyPromos.appendChild(tr);
@@ -1547,32 +1927,47 @@
     }
 
     async function cargarResumenEjecutivoPublicidad() {
-        await cargarBundleDashboard();
+        await cargarBundleDashboard({ silencioso: false, forzar: true });
     }
 
-    // Analítica consolidada en 1 sola petición HTTP (/api/analytics/bundle)
-    async function cargarHeatmaps() {
+    // =========================================================================
+    // ANALÍTICA CONSOLIDADA (/api/analytics/bundle + SWR)
+    // =========================================================================
+    function aplicarAnaliticaBundle(data) {
+        if (!data) return;
+        if (data.serie_temporal) renderGraficoSerieTemporal(data.serie_temporal);
+        if (data.heatmap_hora) renderGraficoHeatmapHora(data.heatmap_hora.labels || [], data.heatmap_hora.data || []);
+        if (data.franjas) {
+            renderDonutFranjas(data.franjas);
+            actualizarTarjetasFranjas(data.franjas);
+        }
+        if (data.heatmap_matriz) {
+            datosMatrizGlobal = data.heatmap_matriz;
+            actualizarInsightsMatriz(datosMatrizGlobal);
+            renderizarMatrizSegunModo(datosMatrizGlobal);
+        }
+        if (data.perfiles) renderPerfilesPermanencia(data.perfiles);
+        if (data.top_productos) renderTopProductosAnalitica(data.top_productos);
+    }
+
+    async function cargarHeatmaps(opciones = {}) {
         if (typeof Chart === "undefined") return;
+        const forzar = Boolean(opciones.forzar);
         const qSerie = construirQueryTemporal({ agrupacion: filtroTemporal.agrupacion || "semana" });
+        const cached = heatCache.get(qSerie);
+
+        if (!forzar && cached && (Date.now() - cached.ts) < SWR_TTL_MS) {
+            aplicarAnaliticaBundle(cached.data);
+            if ((Date.now() - cached.ts) < 5000) return;
+        }
+
         try {
             const { res, seq } = await fetchCancelable("heat", `/api/analytics/bundle?${qSerie}`);
             if (!res.ok || seq !== reqSeq.heat) return;
             const data = await res.json();
             if (seq !== reqSeq.heat) return;
-
-            if (data.serie_temporal) renderGraficoSerieTemporal(data.serie_temporal);
-            if (data.heatmap_hora) renderGraficoHeatmapHora(data.heatmap_hora.labels || [], data.heatmap_hora.data || []);
-            if (data.franjas) {
-                renderDonutFranjas(data.franjas);
-                actualizarTarjetasFranjas(data.franjas);
-            }
-            if (data.heatmap_matriz) {
-                datosMatrizGlobal = data.heatmap_matriz;
-                actualizarInsightsMatriz(datosMatrizGlobal);
-                renderizarMatrizSegunModo(datosMatrizGlobal);
-            }
-            if (data.perfiles) renderPerfilesPermanencia(data.perfiles);
-            if (data.top_productos) renderTopProductosAnalitica(data.top_productos);
+            heatCache.set(qSerie, { ts: Date.now(), data });
+            aplicarAnaliticaBundle(data);
         } catch (_e) {
             // Silencioso en abort
         }
@@ -1634,7 +2029,7 @@
             const track = document.createElement("div");
             track.className = "w-full bg-slate-200 rounded-full h-2";
             const fill = document.createElement("div");
-            fill.className = "bg-kovaq-navy h-2 rounded-full";
+            fill.className = "bg-kovaq-navy h-2 rounded-full transition-[width] duration-300";
             fill.style.width = `${Math.max(8, Math.round((pr.interacciones / maxVal) * 100))}%`;
             track.appendChild(fill);
             row.append(head, track);
@@ -1652,15 +2047,17 @@
 
         canvas.setAttribute(
             "aria-label",
-            `Serie temporal por ${ds.agrupacion || "semana"} con ${labels.length} períodos: tráfico total ${trafico.reduce((a, b) => a + b, 0)}, tomas ${tomados.reduce((a, b) => a + b, 0)}, devoluciones ${devueltos.reduce((a, b) => a + b, 0)}.`
+            `Serie temporal por ${ds.agrupacion || "semana"} con ${labels.length} períodos: visitas ${trafico.reduce((a, b) => a + b, 0)}, tomas ${tomados.reduce((a, b) => a + b, 0)}, devoluciones ${devueltos.reduce((a, b) => a + b, 0)}.`
         );
+
+        const anim = prefiereMovimientoReducido() ? false : { duration: 240 };
 
         if (chartSerieTemporal) {
             chartSerieTemporal.data.labels = labels;
             chartSerieTemporal.data.datasets[0].data = trafico;
             chartSerieTemporal.data.datasets[1].data = tomados;
             chartSerieTemporal.data.datasets[2].data = devueltos;
-            chartSerieTemporal.update("none");
+            chartSerieTemporal.update(prefiereMovimientoReducido() ? "none" : undefined);
             return;
         }
 
@@ -1669,7 +2066,7 @@
             data: {
                 labels,
                 datasets: [
-                    { label: "Tráfico Clientes", data: trafico, borderColor: "#0C2340", backgroundColor: "rgba(12, 35, 64, 0.08)", borderWidth: 2.5, tension: 0.3, fill: true },
+                    { label: "Visitantes", data: trafico, borderColor: "#0C2340", backgroundColor: "rgba(12, 35, 64, 0.08)", borderWidth: 2.5, tension: 0.3, fill: true },
                     { label: "Productos Tomados", data: tomados, borderColor: "#C23B00", backgroundColor: "rgba(194, 59, 0, 0.12)", borderWidth: 2.5, tension: 0.3, fill: false },
                     { label: "Devueltos", data: devueltos, borderColor: "#1D4ED8", borderDash: [5, 5], borderWidth: 2, tension: 0.3, fill: false },
                 ],
@@ -1677,7 +2074,7 @@
             options: {
                 responsive: true,
                 maintainAspectRatio: false,
-                animation: false,
+                animation: anim,
                 plugins: { legend: { position: "top" } },
                 scales: { y: { beginAtZero: true }, x: { ticks: { maxTicksLimit: 12 } } },
             },
@@ -1687,10 +2084,11 @@
     function renderGraficoHeatmapHora(labels, valores) {
         const canvas = document.getElementById("chart-heatmap-hora");
         if (!canvas) return;
+        const anim = prefiereMovimientoReducido() ? false : { duration: 220 };
         if (chartHeatmapHora) {
             chartHeatmapHora.data.labels = labels;
             chartHeatmapHora.data.datasets[0].data = valores;
-            chartHeatmapHora.update("none");
+            chartHeatmapHora.update(prefiereMovimientoReducido() ? "none" : undefined);
             return;
         }
         chartHeatmapHora = new Chart(canvas, {
@@ -1702,7 +2100,7 @@
             options: {
                 responsive: true,
                 maintainAspectRatio: false,
-                animation: false,
+                animation: anim,
                 plugins: { legend: { display: false } },
                 scales: { y: { beginAtZero: true } },
             },
@@ -1714,9 +2112,10 @@
         if (!canvas) return;
         const pct = df.porcentajes || {};
         const datos = [pct["Mañana"] || 0, pct["Tarde"] || 0, pct["Noche"] || 0];
+        const anim = prefiereMovimientoReducido() ? false : { duration: 220 };
         if (chartFranjasDonut) {
             chartFranjasDonut.data.datasets[0].data = datos;
-            chartFranjasDonut.update("none");
+            chartFranjasDonut.update(prefiereMovimientoReducido() ? "none" : undefined);
             return;
         }
         chartFranjasDonut = new Chart(canvas, {
@@ -1725,7 +2124,7 @@
                 labels: ["Mañana", "Tarde", "Noche"],
                 datasets: [{ data: datos, backgroundColor: ["#0C2340", "#C23B00", "#1D4ED8"], borderWidth: 2, borderColor: "#FFFFFF" }],
             },
-            options: { responsive: true, maintainAspectRatio: false, animation: false, plugins: { legend: { position: "bottom" } } },
+            options: { responsive: true, maintainAspectRatio: false, animation: anim, plugins: { legend: { position: "bottom" } } },
         });
     }
 
@@ -1754,11 +2153,11 @@
         if (dm.hora_pico) {
             setTxt("insight-hora-pico", `${dm.hora_pico.hora} (${dm.hora_pico.dia})`);
             const h = parseInt(String(dm.hora_pico.hora || "0").split(":")[0], 10) || 0;
-            let franja = "Madrugada (00h - 06h)";
-            if (h >= 18) franja = "Noche (18h - 23h)";
-            else if (h >= 14) franja = "Tarde (14h - 18h)";
-            else if (h >= 11) franja = "Mediodía (11h - 14h)";
-            else if (h >= 6) franja = "Mañana (06h - 11h)";
+            let franja = "Madrugada (00h a 06h)";
+            if (h >= 18) franja = "Noche (18h a 23h)";
+            else if (h >= 14) franja = "Tarde (14h a 18h)";
+            else if (h >= 11) franja = "Mediodía (11h a 14h)";
+            else if (h >= 6) franja = "Mañana (06h a 11h)";
             setTxt("insight-patron", `Pico en ${franja}`);
         }
     }
@@ -1840,7 +2239,9 @@
         cont.appendChild(table);
     }
 
-    // Inventario y Planograma
+    // =========================================================================
+    // CATÁLOGO DE PRODUCTOS Y CONDUCTA POR PERCHA
+    // =========================================================================
     function renderTablaInventario(items) {
         const tbody = document.getElementById("tabla-inventario-body");
         if (!tbody) return;
@@ -1918,7 +2319,7 @@
             btnAds.className = "btn-kovaq-outline min-h-[34px] text-xs whitespace-nowrap";
             btnAds.textContent = "Analizar con IA";
             btnAds.addEventListener("click", () => {
-                preguntarIARapido(`Optimizar publicidad para ${p.nombre} en ${p.percha_id}`);
+                preguntarIARapido(`Analiza la conducta frente al producto ${p.nombre} en la percha ${p.percha_id} (${p.nivel}) y sugiere mejoras.`);
             });
             tdAcc.appendChild(btnAds);
 
@@ -1956,7 +2357,9 @@
         if (lbl) lbl.textContent = `Mostrando ${visibles} de ${rows.length} productos del planograma.`;
     }
 
-    // Configuración (Sucursales, Cámaras, Planograma y Promociones)
+    // =========================================================================
+    // CONFIGURACIÓN (Planograma, Sucursales, Cámaras y Promociones Opcionales)
+    // =========================================================================
     async function cargarConfiguracionMapa() {
         const q = construirQueryTemporal();
         try {
@@ -2061,7 +2464,7 @@
             tdPromo.className = "p-2.5";
             tdPromo.textContent = (p.promociones && p.promociones.length > 0)
                 ? p.promociones.map((pr) => `${pr.titulo} (-${pr.descuento_pct}%)`).join(", ")
-                : "Sin pauta POP";
+                : "Sin extras";
 
             const tdAct = document.createElement("td");
             tdAct.className = "p-2.5 font-mono-num font-bold";
@@ -2075,6 +2478,7 @@
     async function eliminarCamaraBackend(camId) {
         const res = await fetch(`/api/cameras/${encodeURIComponent(camId)}?sucursal_id=${encodeURIComponent(filtroTemporal.sucursal_id)}`, { method: "DELETE" });
         if (res.ok) {
+            invalidarCaches();
             renderTablaCamaras((await res.json()).camaras || []);
             mostrarAviso("config-feedback-banner", `Cámara ${camId} eliminada del plano.`, "ok");
             sincronizarMapa2D();
@@ -2083,7 +2487,9 @@
         }
     }
 
-    // Chat Kovaq Marketing AI (100% textContent, enlazado a sucursal y período)
+    // =========================================================================
+    // CHAT KOVAQ IA (100% textContent, enfocado en productos y perchas)
+    // =========================================================================
     function agregarBurbuja(autor, texto, tipo) {
         const cont = document.getElementById("chat-messages");
         if (!cont) return null;
@@ -2108,11 +2514,11 @@
     }
 
     async function enviarPreguntaIA(mensaje) {
-        const modo = document.getElementById("chat-modo")?.value || "publicidad";
+        const modo = document.getElementById("chat-modo")?.value || "estrategia";
         const btn = document.getElementById("chat-submit");
         agregarBurbuja("Tú", mensaje, "user");
         if (btn) btn.disabled = true;
-        const burbujaIA = agregarBurbuja("Kovaq Marketing AI", "Consultando métricas de la sucursal y período...", "bot");
+        const burbujaIA = agregarBurbuja("Kovaq IA", "Analizando productos y conducta en la sucursal seleccionada...", "bot");
 
         try {
             const res = await fetch("/api/chat", {
@@ -2145,7 +2551,9 @@
         enviarPreguntaIA(texto);
     }
 
-    // Video, fuentes y subida instantánea
+    // =========================================================================
+    // VIDEO, FUENTES Y SUBIDA INSTANTÁNEA
+    // =========================================================================
     function desmontarStreamPrevio() {
         const liveImg = document.getElementById("live-stream-img");
         if (liveImg) {
@@ -2174,8 +2582,7 @@
         video.appendChild(src);
         cont.appendChild(video);
 
-        const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-        if (!reduceMotion) video.play().catch(() => {});
+        if (!prefiereMovimientoReducido()) video.play().catch(() => {});
     }
 
     function mostrarStreamProcesado() {
@@ -2200,7 +2607,7 @@
         const btnPlay = document.getElementById("btn-toggle-video-play");
         const txtPlay = document.getElementById("txt-toggle-video-play");
 
-        if (videoEl && window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+        if (videoEl && prefiereMovimientoReducido()) {
             videoEl.pause();
             if (txtPlay) txtPlay.textContent = "Reproducir";
             if (btnPlay) btnPlay.setAttribute("aria-pressed", "true");
@@ -2327,8 +2734,9 @@
                     const data = await res.json().catch(() => ({}));
                     if (!res.ok) throw new Error(data.detail || "Error procesando archivo");
                     if (statusEl) statusEl.textContent = data.resumen || "Archivo analizado correctamente.";
+                    invalidarCaches();
                     mostrarStreamProcesado();
-                    await Promise.all([refrescarDashboardsPorPeriodo(), sincronizarTelemetriaBackend()]);
+                    await Promise.all([refrescarDashboardsPorPeriodo({ forzar: true }), sincronizarTelemetriaBackend()]);
                 } catch (err) {
                     if (statusEl) statusEl.textContent = `Error: ${err.message}`;
                 } finally {
@@ -2347,38 +2755,33 @@
                 btnFranjas.setAttribute("aria-pressed", modo === "franjas" ? "true" : "false");
                 btn24h.setAttribute("aria-pressed", modo === "24h" ? "true" : "false");
                 btnFranjas.className = modo === "franjas"
-                    ? "btn-kovaq-outline min-h-[36px] text-xs bg-kovaq-navy text-white border-kovaq-navy"
-                    : "btn-kovaq-outline min-h-[36px] text-xs";
+                    ? "btn-kovaq-outline min-h-[34px] text-xs bg-kovaq-navy text-white border-kovaq-navy"
+                    : "btn-kovaq-outline min-h-[34px] text-xs";
                 btn24h.className = modo === "24h"
-                    ? "btn-kovaq-outline min-h-[36px] text-xs bg-kovaq-navy text-white border-kovaq-navy"
-                    : "btn-kovaq-outline min-h-[36px] text-xs";
+                    ? "btn-kovaq-outline min-h-[34px] text-xs bg-kovaq-navy text-white border-kovaq-navy"
+                    : "btn-kovaq-outline min-h-[34px] text-xs";
             }
             if (datosMatrizGlobal) renderizarMatrizSegunModo(datosMatrizGlobal);
         };
         if (btnFranjas) btnFranjas.addEventListener("click", () => toggleMatriz("franjas"));
         if (btn24h) btn24h.addEventListener("click", () => toggleMatriz("24h"));
 
-        // Inventario: búsqueda con debounce + categoría
+        // Productos: búsqueda con debounce + menú desplegable de categoría
         const searchInv = document.getElementById("input-buscar-inventario");
         let debounceTimer = null;
         if (searchInv) {
             searchInv.addEventListener("input", () => {
                 clearTimeout(debounceTimer);
-                debounceTimer = setTimeout(filtrarInventarioLocal, 150);
+                debounceTimer = setTimeout(filtrarInventarioLocal, 140);
             });
         }
-        const catBtns = Array.from(document.querySelectorAll(".category-tag-btn"));
-        catBtns.forEach((btn) => {
-            btn.addEventListener("click", () => {
-                categoriaActiva = btn.dataset.cat || "Todas";
-                catBtns.forEach((b) => {
-                    const act = b === btn;
-                    b.classList.toggle("active", act);
-                    b.setAttribute("aria-pressed", act ? "true" : "false");
-                });
+        const selCat = document.getElementById("select-categoria-productos");
+        if (selCat) {
+            selCat.addEventListener("change", () => {
+                categoriaActiva = selCat.value || "Todas";
                 filtrarInventarioLocal();
             });
-        });
+        }
 
         // Chat IA
         const chatForm = document.getElementById("chat-form");
@@ -2418,6 +2821,7 @@
                 });
                 const data = await res.json().catch(() => ({}));
                 if (res.ok) {
+                    invalidarCaches();
                     poblarSelectorSucursales(data.sucursales || []);
                     renderTablaSucursales(data.sucursales || []);
                     formSuc.reset();
@@ -2438,8 +2842,9 @@
                     const res = await fetch("/api/simulation/reseed", { method: "POST" });
                     const data = await res.json().catch(() => ({}));
                     if (res.ok) {
+                        invalidarCaches();
                         mostrarAviso("config-feedback-banner", data.mensaje || "Datos de simulación actualizados.", "ok");
-                        await refrescarDashboardsPorPeriodo();
+                        await refrescarDashboardsPorPeriodo({ forzar: true });
                     } else {
                         mostrarAviso("config-feedback-banner", data.detail || "No tienes permisos para regenerar simulación.", "error");
                     }
@@ -2466,6 +2871,7 @@
                 });
                 const data = await res.json().catch(() => ({}));
                 if (res.ok) {
+                    invalidarCaches();
                     renderTablaCamaras(data.camaras || []);
                     formCam.reset();
                     mostrarAviso("config-feedback-banner", "Cámara registrada correctamente en la sucursal.", "ok");
@@ -2476,7 +2882,7 @@
             });
         }
 
-        // Formulario nueva promoción POP
+        // Formulario nueva promoción (opcional)
         const formPromo = document.getElementById("form-nueva-promo");
         if (formPromo) {
             formPromo.addEventListener("submit", async (ev) => {
@@ -2495,8 +2901,9 @@
                 });
                 const data = await res.json().catch(() => ({}));
                 if (res.ok) {
+                    invalidarCaches();
                     formPromo.reset();
-                    mostrarAviso("config-feedback-banner", "Promoción POP guardada y vinculada al análisis.", "ok");
+                    mostrarAviso("config-feedback-banner", "Promoción opcional guardada.", "ok");
                     await Promise.all([cargarConfiguracionMapa(), cargarResumenEjecutivoPublicidad(), sincronizarMapa2D()]);
                 } else {
                     mostrarAviso("config-feedback-banner", data.detail || "No se pudo guardar la promoción.", "error");
@@ -2527,6 +2934,7 @@
                 });
                 const data = await res.json().catch(() => ({}));
                 if (res.ok) {
+                    invalidarCaches();
                     renderTablaPerchas(data.perchas || []);
                     formPlano.reset();
                     mostrarAviso("config-feedback-banner", "Planograma actualizado en la sucursal.", "ok");
@@ -2538,9 +2946,10 @@
         }
     }
 
-    // Arranque y polling controlado por visibilidad
+    // Arranque y polling silencioso gobernado por visibilidad
     document.addEventListener("DOMContentLoaded", async () => {
         inicializarTabs();
+        inicializarCierreGlobalPopovers();
         inicializarFiltrosTemporalesYSucursal();
         inicializarInteraccionMapa();
         inicializarControlesVideoYSubida();
@@ -2550,9 +2959,17 @@
         await Promise.allSettled([cargarSucursales(), cargarDemoTracks()]);
         iniciarBucleHudVideo();
         await Promise.allSettled([
-            refrescarDashboardsPorPeriodo(),
+            refrescarDashboardsPorPeriodo({ silencioso: false }),
             sincronizarTelemetriaBackend(),
         ]);
+
+        // Revalidar silenciosamente al volver a enfocar la pestaña
+        document.addEventListener("visibilitychange", () => {
+            if (!document.hidden) {
+                refrescarDashboardsPorPeriodo({ silencioso: true, forzar: true });
+                if (moduloActivo === "tab-vivo") sincronizarTelemetriaBackend();
+            }
+        });
 
         setInterval(() => {
             if (!document.hidden && moduloActivo === "tab-vivo") {
@@ -2562,8 +2979,8 @@
 
         setInterval(() => {
             if (!document.hidden) {
-                refrescarDashboardsPorPeriodo();
+                refrescarDashboardsPorPeriodo({ silencioso: true, forzar: true });
             }
-        }, 25000);
+        }, 30000);
     });
 })();

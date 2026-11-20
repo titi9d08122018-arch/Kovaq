@@ -9,6 +9,11 @@
     --kovaq-border: #D5DCE4;
     --kovaq-control-border: #7C8A9E;
     --kovaq-slate: #475569;
+    --kovaq-ease: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+html {
+    scroll-behavior: smooth;
 }
 
 body {
@@ -16,6 +21,7 @@ body {
     color: var(--kovaq-navy);
     font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
     margin: 0;
+    -webkit-font-smoothing: antialiased;
 }
 
 .font-title {
@@ -24,6 +30,7 @@ body {
 
 .font-mono-num {
     font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-variant-numeric: tabular-nums;
 }
 
 /* Accesibilidad: cursor de interacción y foco visible de alto contraste (R-32, R-39) */
@@ -41,10 +48,10 @@ button:disabled,
 input:disabled,
 select:disabled {
     cursor: not-allowed;
-    opacity: 0.6;
+    opacity: 0.48;
 }
 
-:is(a, button, input, select, textarea, [tabindex]):focus-visible {
+:is(a, button, input, select, textarea, summary, [tabindex]):focus-visible {
     outline: 3px solid var(--kovaq-navy);
     outline-offset: 2px;
 }
@@ -101,7 +108,7 @@ select:disabled {
     font-size: 0.875rem;
     font-weight: 600;
     border: 1px solid transparent;
-    transition: background-color 0.15s ease, color 0.15s ease;
+    transition: background-color 0.16s var(--kovaq-ease), color 0.16s var(--kovaq-ease), transform 0.12s var(--kovaq-ease);
 }
 
 .nav-link-custom:hover {
@@ -116,28 +123,71 @@ select:disabled {
     font-weight: 700;
 }
 
-/* Componentes base del dashboard */
+/* Tarjetas limpias y superficies planas (R-12: sombra reservada a capas flotantes) */
 .card-kovaq {
     background-color: var(--kovaq-card);
     border: 1px solid var(--kovaq-border);
     border-radius: 16px;
-    box-shadow: 0 1px 3px rgba(12, 35, 64, 0.05);
+    transition: border-color 0.18s var(--kovaq-ease);
 }
 
+.card-kpi {
+    background-color: var(--kovaq-card);
+    border: 1px solid var(--kovaq-border);
+    border-radius: 14px;
+    transition: border-color 0.18s var(--kovaq-ease), transform 0.18s var(--kovaq-ease);
+}
+
+.card-kpi:hover {
+    border-color: var(--kovaq-control-border);
+}
+
+/* Barra de carga sutil en la parte superior del toolbar (sin reiniciar datos a cero) */
+.kovaq-progress-track {
+    position: relative;
+    height: 2px;
+    width: 100%;
+    overflow: hidden;
+    border-radius: 999px;
+    background: transparent;
+    opacity: 0;
+    transition: opacity 0.18s var(--kovaq-ease);
+}
+
+.kovaq-progress-track.loading {
+    opacity: 1;
+    background: rgba(12, 35, 64, 0.08);
+}
+
+.kovaq-progress-bar {
+    position: absolute;
+    inset: 0 auto 0 0;
+    width: 38%;
+    border-radius: 999px;
+    background: var(--kovaq-orange-text);
+    animation: kovaqSlideLoad 1.1s var(--kovaq-ease) infinite;
+}
+
+@keyframes kovaqSlideLoad {
+    0% { transform: translateX(-110%); }
+    100% { transform: translateX(280%); }
+}
+
+/* Botones y controles interactivos */
 .btn-kovaq-primary {
     background-color: var(--kovaq-orange-text);
     color: #FFFFFF;
     border-radius: 10px;
     font-family: 'Space Grotesk', sans-serif;
     font-weight: 700;
-    min-height: 44px;
-    padding: 0 18px;
+    min-height: 40px;
+    padding: 0 16px;
     display: inline-flex;
     align-items: center;
     justify-content: center;
     gap: 8px;
     border: 1px solid transparent;
-    transition: background-color 0.15s ease, transform 0.1s ease;
+    transition: background-color 0.16s var(--kovaq-ease), transform 0.12s var(--kovaq-ease);
 }
 
 .btn-kovaq-primary:hover {
@@ -146,7 +196,7 @@ select:disabled {
 }
 
 .btn-kovaq-primary:active {
-    transform: translateY(1px);
+    transform: scale(0.985);
 }
 
 .btn-kovaq-outline {
@@ -156,13 +206,13 @@ select:disabled {
     border-radius: 10px;
     font-family: 'Space Grotesk', sans-serif;
     font-weight: 700;
-    min-height: 40px;
-    padding: 0 14px;
+    min-height: 38px;
+    padding: 0 13px;
     display: inline-flex;
     align-items: center;
     justify-content: center;
     gap: 6px;
-    transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+    transition: background-color 0.16s var(--kovaq-ease), border-color 0.16s var(--kovaq-ease), color 0.16s var(--kovaq-ease), transform 0.12s var(--kovaq-ease);
 }
 
 .btn-kovaq-outline:hover {
@@ -171,10 +221,15 @@ select:disabled {
     border-color: var(--kovaq-navy);
 }
 
+.btn-kovaq-outline:active {
+    transform: scale(0.985);
+}
+
+/* Selector segmentado / pestañas con transición fluida (Apple HIG tab-bars + segmented-controls) */
 .tab-kovaq-pill {
-    min-height: 44px;
+    min-height: 42px;
     padding: 0 16px;
-    border-radius: 12px;
+    border-radius: 10px;
     font-family: 'Space Grotesk', sans-serif;
     font-size: 0.84rem;
     font-weight: 700;
@@ -185,7 +240,7 @@ select:disabled {
     align-items: center;
     gap: 8px;
     white-space: nowrap;
-    transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+    transition: background-color 0.18s var(--kovaq-ease), color 0.18s var(--kovaq-ease), border-color 0.18s var(--kovaq-ease), box-shadow 0.18s var(--kovaq-ease);
 }
 
 .tab-kovaq-pill:hover {
@@ -209,7 +264,7 @@ select:disabled {
     background-color: #FFFFFF;
     color: var(--kovaq-navy);
     border: 1.5px solid var(--kovaq-control-border);
-    transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+    transition: background-color 0.16s var(--kovaq-ease), color 0.16s var(--kovaq-ease), border-color 0.16s var(--kovaq-ease);
 }
 
 .category-tag-btn:hover {
@@ -229,9 +284,170 @@ select:disabled {
     color: var(--kovaq-navy);
     border: 1.5px solid var(--kovaq-control-border);
     border-radius: 10px;
-    font-size: 0.875rem;
+    font-size: 0.84rem;
     min-height: 40px;
-    padding: 6px 12px;
+    padding: 5px 11px;
+    transition: border-color 0.16s var(--kovaq-ease), background-color 0.16s var(--kovaq-ease);
+}
+
+.kovaq-select {
+    height: 40px;
+    text-overflow: ellipsis;
+    overflow: hidden;
+    white-space: nowrap;
+}
+
+.kovaq-input:hover,
+.kovaq-select:hover {
+    border-color: var(--kovaq-navy);
+}
+
+/* Popover flotante (calendario de fechas con datos y menús desplegables - Apple HIG popovers.md) */
+.kovaq-popover {
+    position: absolute;
+    top: calc(100% + 8px);
+    right: 0;
+    z-index: 45;
+    background: #FFFFFF;
+    border: 1px solid var(--kovaq-border);
+    border-radius: 14px;
+    box-shadow: 0 14px 36px rgba(12, 35, 64, 0.16);
+    animation: kovaqPopoverIn 0.16s var(--kovaq-ease);
+    transform-origin: top right;
+}
+
+@media (max-width: 639.98px) {
+    .kovaq-popover {
+        left: 0;
+        right: 0;
+        width: 100% !important;
+        max-width: 100%;
+    }
+}
+
+@keyframes kovaqPopoverIn {
+    from {
+        opacity: 0;
+        transform: translateY(-4px) scale(0.98);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+    }
+}
+
+/* Calendario inteligente: solo días con datos reales registrados */
+.cal-grid {
+    display: grid;
+    grid-template-columns: repeat(7, minmax(0, 1fr));
+    gap: 4px;
+}
+
+.cal-day {
+    position: relative;
+    min-height: 36px;
+    border-radius: 8px;
+    font-size: 0.78rem;
+    font-weight: 600;
+    font-family: 'JetBrains Mono', monospace;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid transparent;
+    background: transparent;
+    color: var(--kovaq-navy);
+    transition: background-color 0.14s var(--kovaq-ease), color 0.14s var(--kovaq-ease), border-color 0.14s var(--kovaq-ease);
+}
+
+.cal-day.has-data {
+    background: #F1F5F9;
+    border-color: #CBD5E1;
+}
+
+.cal-day.has-data:hover:not(:disabled) {
+    background: #E2E8F0;
+    border-color: var(--kovaq-navy);
+}
+
+.cal-day.has-data::after {
+    content: "";
+    width: 4px;
+    height: 4px;
+    border-radius: 999px;
+    background: var(--kovaq-orange-text);
+    margin-top: 2px;
+}
+
+.cal-day.in-range {
+    background: #FFF1E8;
+    border-color: #FDBA74;
+    color: var(--kovaq-navy);
+}
+
+.cal-day.selected-edge {
+    background: var(--kovaq-navy) !important;
+    border-color: var(--kovaq-navy) !important;
+    color: #FFFFFF !important;
+}
+
+.cal-day.selected-edge::after {
+    background: #FFFFFF;
+}
+
+.cal-day:disabled {
+    background: transparent;
+    border-color: transparent;
+    color: #94A3B8;
+    opacity: 0.45;
+}
+
+/* Paneles desplegables progresivos (Apple HIG disclosure-controls.md) */
+details.kovaq-disclosure {
+    background: var(--kovaq-card);
+    border: 1px solid var(--kovaq-border);
+    border-radius: 14px;
+    overflow: hidden;
+    transition: border-color 0.18s var(--kovaq-ease);
+}
+
+details.kovaq-disclosure[open] {
+    border-color: var(--kovaq-control-border);
+}
+
+details.kovaq-disclosure > summary {
+    list-style: none;
+    padding: 14px 18px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    user-select: none;
+    transition: background-color 0.16s var(--kovaq-ease);
+}
+
+details.kovaq-disclosure > summary::-webkit-details-marker {
+    display: none;
+}
+
+details.kovaq-disclosure > summary:hover {
+    background-color: #F8FAFC;
+}
+
+details.kovaq-disclosure .disclosure-chevron {
+    transition: transform 0.2s var(--kovaq-ease);
+    color: var(--kovaq-slate);
+}
+
+details.kovaq-disclosure[open] .disclosure-chevron {
+    transform: rotate(180deg);
+    color: var(--kovaq-navy);
+}
+
+details.kovaq-disclosure > .disclosure-body {
+    padding: 0 18px 18px 18px;
+    border-top: 1px solid var(--kovaq-border);
+    animation: kovaqPaneIn 0.18s var(--kovaq-ease);
 }
 
 /* Contenedores estrictos para video (16:9 exacto con HUD) y mapa arquitectónico 2D */
@@ -285,7 +501,7 @@ select:disabled {
 
 .thermal-legend-bar {
     height: 10px;
-    width: 120px;
+    width: 112px;
     border-radius: 999px;
     background: linear-gradient(90deg, #2563EB 0%, #06B6D4 28%, #FACC15 58%, #F97316 80%, #DC2626 100%);
     border: 1px solid rgba(12, 35, 64, 0.2);
@@ -300,7 +516,7 @@ select:disabled {
     border: 1.5px solid var(--kovaq-control-border);
     background: #FFFFFF;
     color: var(--kovaq-navy);
-    transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+    transition: background-color 0.15s var(--kovaq-ease), color 0.15s var(--kovaq-ease), border-color 0.15s var(--kovaq-ease);
 }
 
 .map-layer-pill.active {
@@ -309,12 +525,25 @@ select:disabled {
     border-color: var(--kovaq-navy);
 }
 
+/* Transición suave entre módulos (Apple HIG motion.md: breve, precisa y cancelable) */
 .module-pane {
     display: none;
 }
 
 .module-pane.active {
     display: block;
+    animation: kovaqPaneIn 0.2s var(--kovaq-ease);
+}
+
+@keyframes kovaqPaneIn {
+    from {
+        opacity: 0;
+        transform: translateY(5px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
 }
 
 .hidden-hud {
@@ -323,6 +552,9 @@ select:disabled {
 
 /* Reducción de movimiento obligatoria (WCAG 2.2 / Apple HIG / antislop R-39) */
 @media (prefers-reduced-motion: reduce) {
+    html {
+        scroll-behavior: auto;
+    }
     *,
     *::before,
     *::after {
@@ -330,15 +562,5 @@ select:disabled {
         animation-iteration-count: 1 !important;
         transition-duration: 0.01ms !important;
         scroll-behavior: auto !important;
-    }
-}
-
-@media (max-width: 640px) {
-    .hud-stage {
-        height: 230px;
-    }
-
-    .map-stage-container {
-        height: 260px;
     }
 }
